@@ -1,25 +1,25 @@
 import * as THREE from 'three';
 
 /**
- * Animation Engine for Squareness-Based Layout
+ * Animation Engine with Per-Point Interpolation
  *
- * Timeline:
- *   Events 1-12 : Show each leaf vggt cluster (deepest first)
- *   Events 13-17: Merge events bottom-up (5 merges)
- *
- * Merge behaviour:
- *   - Currently-visible children slide toward the merged node's
- *     mergeTargetPosition, shrink and fade out.
- *   - The merged result fades in at mergeTargetPosition, scaled
- *     to fit the mergeRegion.
+ * Merge transitions move individual points from their child-cluster
+ * positions to their merged-result positions, matching the approach
+ * from the Gemini point-set interpolation demo:
+ *   - Matched points lerp smoothly (cubic easing)
+ *   - Child-only points fade out in place
+ *   - Merged-only points fade in at target
  */
 export class SquarenessAnimationEngine {
-    constructor(clusters, layoutEngine) {
+    constructor(clusters, layoutEngine, worldGroup) {
         this.clusters = clusters;
         this.layoutEngine = layoutEngine;
+        this.worldGroup = worldGroup;
         this.mergeEvents = [];
         this.activeAnimations = [];
-        this.animationDuration = 0.8;
+        this.transitionClouds = [];
+        this.mergeDuration = 2.5;
+        this.leafFadeDuration = 0.5;
     }
 
     initTimeline() {
@@ -29,9 +29,6 @@ export class SquarenessAnimationEngine {
             return [];
         }
 
-        console.log("=== SQUARENESS ANIMATION ENGINE ===");
-
-        // Separate leaves from merge nodes
         const leaves = [];
         const merges = [];
         for (const node of treeNodes) {
@@ -39,19 +36,15 @@ export class SquarenessAnimationEngine {
             else merges.push(node);
         }
 
-        // Sort leaves: deepest first, then by path for stability
         leaves.sort((a, b) => {
             if (b.depth !== a.depth) return b.depth - a.depth;
             return a.cluster.path.localeCompare(b.cluster.path);
         });
-
-        // Sort merges: deepest first (bottom-up)
         merges.sort((a, b) => {
             if (b.depth !== a.depth) return b.depth - a.depth;
             return a.cluster.path.localeCompare(b.cluster.path);
         });
 
-        // Build timeline: all leaves first, then all merges
         for (const node of leaves) {
             this.mergeEvents.push({
                 path: node.cluster.path,
@@ -71,21 +64,24 @@ export class SquarenessAnimationEngine {
             });
         }
 
-        console.log(`Total events: ${this.mergeEvents.length} (${leaves.length} leaves + ${merges.length} merges)`);
-        this.mergeEvents.forEach((e, i) => {
-            const tag = e.isLeaf ? 'LEAF ' : 'MERGE';
-            console.log(`  ${i + 1}. [${tag}] ${e.path} (depth ${e.depth})`);
-        });
-
+        console.log(`Timeline: ${this.mergeEvents.length} events (${leaves.length} leaves + ${merges.length} merges)`);
         return this.mergeEvents;
     }
 
-    // ----------------------------------------------------------------
-    // Instant jump (no animation)
-    // ----------------------------------------------------------------
+    cleanupTransitions() {
+        for (const cloud of this.transitionClouds) {
+            this.worldGroup.remove(cloud);
+            cloud.geometry.dispose();
+            cloud.material.dispose();
+        }
+        this.transitionClouds = [];
+        this.activeAnimations = this.activeAnimations.filter(a => a.type !== 'mergeTransition');
+    }
 
     applyEventInstant(eventIndex) {
-        // Reset every cluster to its home state
+        this.cleanupTransitions();
+        this.activeAnimations = [];
+
         for (const cluster of this.clusters.values()) {
             if (cluster.pointCloud) {
                 cluster.pointCloud.visible = false;
@@ -99,17 +95,14 @@ export class SquarenessAnimationEngine {
             }
         }
 
-        // Replay events 0..eventIndex
         for (let i = 0; i <= eventIndex; i++) {
             const evt = this.mergeEvents[i];
             if (!evt) continue;
             const c = evt.cluster;
 
             if (evt.isLeaf) {
-                // Show leaf
                 if (c.pointCloud) c.pointCloud.visible = true;
             } else {
-                // Merge event: show the merged result, hide children
                 if (c.pointCloud) c.pointCloud.visible = true;
                 for (const childPath of evt.children) {
                     const child = this.clusters.get(childPath);
@@ -119,47 +112,28 @@ export class SquarenessAnimationEngine {
         }
     }
 
-    // ----------------------------------------------------------------
-    // Step forward / backward with animation
-    // ----------------------------------------------------------------
-
     playEvent(eventIndex, direction = 1) {
         const evt = this.mergeEvents[eventIndex];
         if (!evt) return;
-        const cluster = evt.cluster;
 
         if (direction > 0) {
-            // ---- FORWARD ----
             if (evt.isLeaf) {
-                // Show leaf with fade-in
-                if (cluster.pointCloud) {
-                    cluster.pointCloud.visible = true;
-                    this.animateFadeIn(cluster);
+                if (evt.cluster.pointCloud) {
+                    evt.cluster.pointCloud.visible = true;
+                    this.animateFadeIn(evt.cluster);
                 }
             } else {
-                // Merge event
-                // 1) Show merged result with fade-in
-                if (cluster.pointCloud) {
-                    cluster.pointCloud.visible = true;
-                    this.animateFadeIn(cluster);
-                }
-                // 2) Slide visible children toward merge target, then hide
-                const target = cluster.mergeTargetPosition || cluster.hierarchyPosition;
-                for (const childPath of evt.children) {
-                    const child = this.clusters.get(childPath);
-                    if (child && child.pointCloud && child.pointCloud.visible) {
-                        this.animateMergeChild(child, target);
-                    }
-                }
+                this.playMergeTransition(evt);
             }
         } else {
-            // ---- BACKWARD ----
+            this.cleanupTransitions();
             if (evt.isLeaf) {
-                // Hide this leaf
-                if (cluster.pointCloud) this.animateFadeOut(cluster);
+                if (evt.cluster.pointCloud) this.animateFadeOut(evt.cluster);
             } else {
-                // Un-merge: hide merged, restore children
-                if (cluster.pointCloud) this.animateFadeOut(cluster);
+                if (evt.cluster.pointCloud) {
+                    evt.cluster.pointCloud.visible = false;
+                    evt.cluster.pointCloud.material.opacity = 1;
+                }
                 for (const childPath of evt.children) {
                     const child = this.clusters.get(childPath);
                     if (child && child.pointCloud) {
@@ -173,9 +147,172 @@ export class SquarenessAnimationEngine {
         }
     }
 
-    // ----------------------------------------------------------------
-    // Animation primitives
-    // ----------------------------------------------------------------
+    playMergeTransition(evt) {
+        const merged = evt.cluster;
+        const matchData = merged.matchData;
+
+        if (!matchData || !merged.pointCloud) {
+            if (merged.pointCloud) {
+                merged.pointCloud.visible = true;
+                this.animateFadeIn(merged);
+            }
+            for (const childPath of evt.children) {
+                const child = this.clusters.get(childPath);
+                if (child && child.pointCloud && child.pointCloud.visible) {
+                    this.animateFallbackMerge(child, merged.hierarchyPosition);
+                }
+            }
+            return;
+        }
+
+        const { matchedPairs, childOnlyPoints, mergedOnlyIndices } = matchData;
+
+        for (const childPath of evt.children) {
+            const child = this.clusters.get(childPath);
+            if (child && child.pointCloud) child.pointCloud.visible = false;
+        }
+        merged.pointCloud.visible = false;
+
+        // --- Matched points cloud ---
+        const mLen = matchedPairs.length;
+        const matchedStart = new Float32Array(mLen * 3);
+        const matchedEnd = new Float32Array(mLen * 3);
+        const matchedColors = new Float32Array(mLen * 3);
+
+        for (let i = 0; i < mLen; i++) {
+            const pair = matchedPairs[i];
+            const child = this.clusters.get(pair.childPath);
+            if (!child || !child.pointCloud) continue;
+
+            this.writeWorldPos(child, pair.childIdx, matchedStart, i * 3);
+            this.writeWorldPos(merged, pair.mergedIdx, matchedEnd, i * 3);
+            this.writeColor(child, pair.childIdx, matchedColors, i * 3);
+        }
+
+        const matchedGeom = new THREE.BufferGeometry();
+        matchedGeom.setAttribute('position', new THREE.Float32BufferAttribute(matchedStart.slice(), 3));
+        matchedGeom.setAttribute('color', new THREE.Float32BufferAttribute(matchedColors, 3));
+        const matchedMat = this.makeTransitionMaterial(1.0);
+        const matchedCloud = new THREE.Points(matchedGeom, matchedMat);
+
+        // --- Child-only cloud (fly to nearest merged point) ---
+        const coLen = childOnlyPoints.length;
+        const coStart = new Float32Array(coLen * 3);
+        const coEnd = new Float32Array(coLen * 3);
+        const coCol = new Float32Array(coLen * 3);
+
+        for (let i = 0; i < coLen; i++) {
+            const cp = childOnlyPoints[i];
+            const child = this.clusters.get(cp.childPath);
+            if (!child || !child.pointCloud) continue;
+            this.writeWorldPos(child, cp.childIdx, coStart, i * 3);
+            this.writeColor(child, cp.childIdx, coCol, i * 3);
+            if (cp.flyToMergedIdx !== undefined) {
+                this.writeWorldPos(merged, cp.flyToMergedIdx, coEnd, i * 3);
+            } else {
+                coEnd[i * 3] = coStart[i * 3];
+                coEnd[i * 3 + 1] = coStart[i * 3 + 1];
+                coEnd[i * 3 + 2] = coStart[i * 3 + 2];
+            }
+        }
+
+        const coGeom = new THREE.BufferGeometry();
+        coGeom.setAttribute('position', new THREE.Float32BufferAttribute(coStart.slice(), 3));
+        coGeom.setAttribute('color', new THREE.Float32BufferAttribute(coCol, 3));
+        const coMat = this.makeTransitionMaterial(1.0);
+        const childOnlyCloud = new THREE.Points(coGeom, coMat);
+
+        // --- Merged-only cloud (fly from nearest child point) ---
+        const moLen = mergedOnlyIndices.length;
+        const moStart = new Float32Array(moLen * 3);
+        const moEnd = new Float32Array(moLen * 3);
+        const moCol = new Float32Array(moLen * 3);
+
+        for (let i = 0; i < moLen; i++) {
+            const entry = mergedOnlyIndices[i];
+            const mIdx = typeof entry === 'object' ? entry.mergedIdx : entry;
+            this.writeWorldPos(merged, mIdx, moEnd, i * 3);
+            this.writeColor(merged, mIdx, moCol, i * 3);
+            if (typeof entry === 'object' && entry.flyFromChildPath) {
+                const srcChild = this.clusters.get(entry.flyFromChildPath);
+                if (srcChild && srcChild.pointCloud) {
+                    this.writeWorldPos(srcChild, entry.flyFromChildIdx, moStart, i * 3);
+                } else {
+                    moStart[i * 3] = moEnd[i * 3];
+                    moStart[i * 3 + 1] = moEnd[i * 3 + 1];
+                    moStart[i * 3 + 2] = moEnd[i * 3 + 2];
+                }
+            } else {
+                moStart[i * 3] = moEnd[i * 3];
+                moStart[i * 3 + 1] = moEnd[i * 3 + 1];
+                moStart[i * 3 + 2] = moEnd[i * 3 + 2];
+            }
+        }
+
+        const moGeom = new THREE.BufferGeometry();
+        moGeom.setAttribute('position', new THREE.Float32BufferAttribute(moStart.slice(), 3));
+        moGeom.setAttribute('color', new THREE.Float32BufferAttribute(moCol, 3));
+        const moMat = this.makeTransitionMaterial(0.0);
+        const mergedOnlyCloud = new THREE.Points(moGeom, moMat);
+
+        this.worldGroup.add(matchedCloud);
+        this.worldGroup.add(childOnlyCloud);
+        this.worldGroup.add(mergedOnlyCloud);
+        this.transitionClouds.push(matchedCloud, childOnlyCloud, mergedOnlyCloud);
+
+        this.activeAnimations.push({
+            type: 'mergeTransition',
+            matchedCloud, childOnlyCloud, mergedOnlyCloud,
+            matchedStart, matchedEnd,
+            matchedCount: mLen,
+            coStart, coEnd, coCount: coLen,
+            moStart, moEnd, moCount: moLen,
+            mergedCluster: merged,
+            childPaths: evt.children,
+            startTime: performance.now(),
+            duration: this.mergeDuration * 1000,
+            onComplete: () => {
+                this.worldGroup.remove(matchedCloud);
+                this.worldGroup.remove(childOnlyCloud);
+                this.worldGroup.remove(mergedOnlyCloud);
+                matchedGeom.dispose(); matchedMat.dispose();
+                coGeom.dispose(); coMat.dispose();
+                moGeom.dispose(); moMat.dispose();
+                this.transitionClouds = this.transitionClouds.filter(
+                    c => c !== matchedCloud && c !== childOnlyCloud && c !== mergedOnlyCloud
+                );
+                merged.pointCloud.visible = true;
+                merged.pointCloud.material.opacity = 1;
+            }
+        });
+    }
+
+    writeWorldPos(cluster, localIdx, out, offset) {
+        const pos = cluster.pointCloud.geometry.attributes.position;
+        const s = cluster.fitScale || 1;
+        const hp = cluster.hierarchyPosition;
+        out[offset]     = hp.x + pos.getX(localIdx) * s;
+        out[offset + 1] = hp.y + pos.getY(localIdx) * s;
+        out[offset + 2] = hp.z + pos.getZ(localIdx) * s;
+    }
+
+    writeColor(cluster, localIdx, out, offset) {
+        const col = cluster.pointCloud.geometry.attributes.color;
+        out[offset]     = col.getX(localIdx);
+        out[offset + 1] = col.getY(localIdx);
+        out[offset + 2] = col.getZ(localIdx);
+    }
+
+    makeTransitionMaterial(opacity) {
+        return new THREE.PointsMaterial({
+            size: 5.0,
+            vertexColors: true,
+            sizeAttenuation: false,
+            transparent: true,
+            opacity,
+            depthWrite: false
+        });
+    }
 
     animateFadeIn(cluster) {
         if (!cluster.pointCloud) return;
@@ -184,7 +321,7 @@ export class SquarenessAnimationEngine {
         this.activeAnimations.push({
             type: 'fadeIn', cluster,
             startTime: performance.now(),
-            duration: this.animationDuration * 1000
+            duration: this.leafFadeDuration * 1000
         });
     }
 
@@ -194,7 +331,7 @@ export class SquarenessAnimationEngine {
         this.activeAnimations.push({
             type: 'fadeOut', cluster,
             startTime: performance.now(),
-            duration: this.animationDuration * 1000,
+            duration: this.leafFadeDuration * 1000,
             onComplete: () => {
                 cluster.pointCloud.visible = false;
                 cluster.pointCloud.material.opacity = 1;
@@ -202,17 +339,16 @@ export class SquarenessAnimationEngine {
         });
     }
 
-    animateMergeChild(child, targetPos) {
+    animateFallbackMerge(child, targetPos) {
         if (!child.pointCloud || !targetPos) return;
         const startPos = child.group.position.clone();
         const endPos = targetPos.clone();
         const startScale = child.group.scale.x;
-
         this.activeAnimations.push({
-            type: 'mergeChild', cluster: child,
+            type: 'fallbackMerge', cluster: child,
             startPos, endPos, startScale,
             startTime: performance.now(),
-            duration: this.animationDuration * 1000,
+            duration: this.mergeDuration * 1000,
             onComplete: () => {
                 child.pointCloud.visible = false;
                 child.pointCloud.material.opacity = 1;
@@ -222,29 +358,59 @@ export class SquarenessAnimationEngine {
         });
     }
 
-    // ----------------------------------------------------------------
-    // Per-frame update
-    // ----------------------------------------------------------------
-
     update(dt) {
         const now = performance.now();
         for (let i = this.activeAnimations.length - 1; i >= 0; i--) {
             const a = this.activeAnimations[i];
             const t = Math.min((now - a.startTime) / a.duration, 1);
-            const e = this.ease(t);
+            const e = this.easeInOutCubic(t);
 
             switch (a.type) {
                 case 'fadeIn':
                     a.cluster.pointCloud.material.opacity = e;
                     break;
+
                 case 'fadeOut':
                     a.cluster.pointCloud.material.opacity = 1 - e;
                     break;
-                case 'mergeChild':
+
+                case 'fallbackMerge':
                     a.cluster.group.position.lerpVectors(a.startPos, a.endPos, e);
                     a.cluster.group.scale.setScalar(a.startScale * (1 - e * 0.5));
                     a.cluster.pointCloud.material.opacity = 1 - e * 0.85;
                     break;
+
+                case 'mergeTransition': {
+                    const mArr = a.matchedCloud.geometry.attributes.position.array;
+                    for (let j = 0; j < a.matchedCount; j++) {
+                        const j3 = j * 3;
+                        mArr[j3]     = a.matchedStart[j3]     + (a.matchedEnd[j3]     - a.matchedStart[j3])     * e;
+                        mArr[j3 + 1] = a.matchedStart[j3 + 1] + (a.matchedEnd[j3 + 1] - a.matchedStart[j3 + 1]) * e;
+                        mArr[j3 + 2] = a.matchedStart[j3 + 2] + (a.matchedEnd[j3 + 2] - a.matchedStart[j3 + 2]) * e;
+                    }
+                    a.matchedCloud.geometry.attributes.position.needsUpdate = true;
+
+                    const coArr = a.childOnlyCloud.geometry.attributes.position.array;
+                    for (let j = 0; j < a.coCount; j++) {
+                        const j3 = j * 3;
+                        coArr[j3]     = a.coStart[j3]     + (a.coEnd[j3]     - a.coStart[j3])     * e;
+                        coArr[j3 + 1] = a.coStart[j3 + 1] + (a.coEnd[j3 + 1] - a.coStart[j3 + 1]) * e;
+                        coArr[j3 + 2] = a.coStart[j3 + 2] + (a.coEnd[j3 + 2] - a.coStart[j3 + 2]) * e;
+                    }
+                    a.childOnlyCloud.geometry.attributes.position.needsUpdate = true;
+                    a.childOnlyCloud.material.opacity = 1 - e * 0.3;
+
+                    const moArr = a.mergedOnlyCloud.geometry.attributes.position.array;
+                    for (let j = 0; j < a.moCount; j++) {
+                        const j3 = j * 3;
+                        moArr[j3]     = a.moStart[j3]     + (a.moEnd[j3]     - a.moStart[j3])     * e;
+                        moArr[j3 + 1] = a.moStart[j3 + 1] + (a.moEnd[j3 + 1] - a.moStart[j3 + 1]) * e;
+                        moArr[j3 + 2] = a.moStart[j3 + 2] + (a.moEnd[j3 + 2] - a.moStart[j3 + 2]) * e;
+                    }
+                    a.mergedOnlyCloud.geometry.attributes.position.needsUpdate = true;
+                    a.mergedOnlyCloud.material.opacity = e;
+                    break;
+                }
             }
 
             if (t >= 1) {
@@ -254,7 +420,7 @@ export class SquarenessAnimationEngine {
         }
     }
 
-    ease(t) {
-        return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    easeInOutCubic(t) {
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 }
