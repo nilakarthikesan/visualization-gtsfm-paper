@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createPointMaterial } from './point-material.js?v=38';
 
 export class Cluster {
     constructor(path, type, childrenPaths = []) {
@@ -75,6 +76,13 @@ export class VGGTDataLoader {
 
         await Promise.all(promises);
         
+        await this.loadTimestamps();
+        for (const [path, cluster] of this.clusters) {
+            if (this.timestamps[path] !== undefined) {
+                cluster.timestamp = this.timestamps[path];
+            }
+        }
+
         await this.loadCameraExtrinsics();
         this.computeSceneOrientation();
         this.computeGlobalBoundsAndNormalize();
@@ -132,13 +140,7 @@ export class VGGTDataLoader {
                     sumZ / posAttr.count
                 );
 
-                const material = new THREE.PointsMaterial({
-                    size: 5.0,
-                    vertexColors: true,
-                    sizeAttenuation: false,
-                    transparent: true,
-                    opacity: 1.0
-                });
+                const material = createPointMaterial({ pointSize: 12.0 });
 
                 const cluster = this.clusters.get(path);
                 if (cluster) {
@@ -208,10 +210,21 @@ export class VGGTDataLoader {
                 geometry.translate(-this.globalCenter.x, -this.globalCenter.y, -this.globalCenter.z);
                 geometry.applyMatrix4(this.sceneRotation);
                 geometry.scale(this.scaleFactor, this.scaleFactor, this.scaleFactor);
-                
+            }
+        }
+
+        const alignRotation = this.computeFrontAlignment();
+
+        for (const [path, cluster] of this.clusters) {
+            if (cluster.pointCloud && cluster.pointCloud.geometry) {
+                const geometry = cluster.pointCloud.geometry;
+
+                if (alignRotation) {
+                    geometry.applyMatrix4(alignRotation);
+                }
+
                 geometry.computeBoundingSphere();
-                
-                // Center geometry at origin so fitScale works symmetrically
+
                 const center = geometry.boundingSphere.center.clone();
                 geometry.translate(-center.x, -center.y, -center.z);
                 geometry.computeBoundingSphere();
@@ -219,10 +232,45 @@ export class VGGTDataLoader {
                 cluster.originalCenter.copy(center);
                 cluster.radius = geometry.boundingSphere.radius;
                 
-                cluster.pointCloud.material.size = 5.0;
-                cluster.pointCloud.material.needsUpdate = true;
+                cluster.pointCloud.material.uniforms.uPointSize.value = 12.0;
             }
         }
+    }
+
+    computeFrontAlignment() {
+        const mergedCluster = this.clusters.get('merged');
+        if (!mergedCluster || !mergedCluster.pointCloud) return null;
+
+        const pos = mergedCluster.pointCloud.geometry.attributes.position;
+        const n = pos.count;
+        if (n < 3) return null;
+
+        let sumX = 0, sumZ = 0;
+        for (let i = 0; i < n; i++) {
+            sumX += pos.getX(i);
+            sumZ += pos.getZ(i);
+        }
+        const meanX = sumX / n;
+        const meanZ = sumZ / n;
+
+        let covXX = 0, covXZ = 0, covZZ = 0;
+        for (let i = 0; i < n; i++) {
+            const dx = pos.getX(i) - meanX;
+            const dz = pos.getZ(i) - meanZ;
+            covXX += dx * dx;
+            covXZ += dx * dz;
+            covZZ += dz * dz;
+        }
+        covXX /= n;
+        covXZ /= n;
+        covZZ /= n;
+
+        const angle = 0.5 * Math.atan2(2 * covXZ, covXX - covZZ);
+
+        console.log(`PCA front alignment: rotating ${THREE.MathUtils.radToDeg(-angle).toFixed(1)} degrees around Y`);
+
+        const rotMatrix = new THREE.Matrix4().makeRotationY(-angle);
+        return rotMatrix;
     }
 
     async loadCameraExtrinsics() {
@@ -547,12 +595,31 @@ export class VGGTDataLoader {
         return flatPaths;
     }
 
+    async loadTimestamps() {
+        this.timestamps = {};
+        try {
+            const response = await fetch('data/gerrard-hall-vggt/results/timestamps.json');
+            if (!response.ok) throw new Error('timestamps.json not found');
+            const data = await response.json();
+            for (const [path, info] of Object.entries(data)) {
+                this.timestamps[path] = info.epoch;
+            }
+            console.log(`Loaded timestamps for ${Object.keys(this.timestamps).length} clusters`);
+        } catch (e) {
+            console.warn('Could not load timestamps, using structural ordering:', e);
+        }
+    }
+
     getStructure() {
         return {
             'vggt': { type: 'vggt', children: [] },
 
             'C_1': {
-                'vggt': { type: 'vggt', children: [] }
+                'vggt': { type: 'vggt', children: [] },
+                'C_1_1': {
+                    'vggt': { type: 'vggt', children: [] }
+                },
+                'merged': { type: 'merged', children: ['C_1/vggt', 'C_1/C_1_1/vggt'] }
             },
 
             'C_2': {
@@ -560,21 +627,17 @@ export class VGGTDataLoader {
             },
 
             'C_3': {
-                'vggt': { type: 'vggt', children: [] }
-            },
-
-            'C_4': {
+                'C_3_1': {
+                    'vggt': { type: 'vggt', children: [] }
+                },
+                'C_3_2': {
+                    'vggt': { type: 'vggt', children: [] }
+                },
                 'vggt': { type: 'vggt', children: [] },
-                'C_4_1': {
-                    'vggt': { type: 'vggt', children: [] }
-                },
-                'C_4_2': {
-                    'vggt': { type: 'vggt', children: [] }
-                },
-                'merged': { type: 'merged', children: ['C_4/vggt', 'C_4/C_4_1/vggt', 'C_4/C_4_2/vggt'] }
+                'merged': { type: 'merged', children: ['C_3/C_3_1/vggt', 'C_3/C_3_2/vggt', 'C_3/vggt'] }
             },
 
-            'merged': { type: 'merged', children: ['vggt', 'C_1/vggt', 'C_2/vggt', 'C_3/vggt', 'C_4/merged'] }
+            'merged': { type: 'merged', children: ['C_1/merged', 'C_2/vggt', 'C_3/merged'] }
         };
     }
 }

@@ -30,7 +30,7 @@ export class InteractionEngine {
         const intersects = this.raycaster.intersectObjects(pointClouds);
 
         if (this.hoveredCluster) {
-            this.hoveredCluster.pointCloud.material.size = 2.0;
+            this.hoveredCluster.pointCloud.material.uniforms.uPointSize.value = 12.0;
             this.hoveredCluster = null;
         }
 
@@ -38,7 +38,7 @@ export class InteractionEngine {
             const cluster = intersects[0].object.userData.cluster;
             if (cluster) {
                 this.hoveredCluster = cluster;
-                cluster.pointCloud.material.size = 3.5;
+                cluster.pointCloud.material.uniforms.uPointSize.value = 14.0;
             }
         }
     }

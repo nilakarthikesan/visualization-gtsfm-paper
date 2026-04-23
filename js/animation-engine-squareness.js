@@ -1,15 +1,6 @@
 import * as THREE from 'three';
+import { createPointMaterial, applyBlendMode } from './point-material.js?v=38';
 
-/**
- * Animation Engine with Per-Point Interpolation
- *
- * Merge transitions move individual points from their child-cluster
- * positions to their merged-result positions, matching the approach
- * from the Gemini point-set interpolation demo:
- *   - Matched points lerp smoothly (cubic easing)
- *   - Child-only points fade out in place
- *   - Merged-only points fade in at target
- */
 export class SquarenessAnimationEngine {
     constructor(clusters, layoutEngine, worldGroup) {
         this.clusters = clusters;
@@ -17,9 +8,74 @@ export class SquarenessAnimationEngine {
         this.worldGroup = worldGroup;
         this.mergeEvents = [];
         this.activeAnimations = [];
-        this.transitionClouds = [];
         this.mergeDuration = 2.5;
         this.leafFadeDuration = 0.5;
+
+        this.particleEngine = null;
+        this.preMatchedCloud = null;
+        this.preChildOnlyCloud = null;
+        this.preMergedOnlyCloud = null;
+        this.matchedStartBuf = null;
+        this.matchedEndBuf = null;
+        this.coStartBuf = null;
+        this.coEndBuf = null;
+        this.moStartBuf = null;
+        this.moEndBuf = null;
+    }
+
+    initTransitionBuffers(blendMode = 'splat', isDark = false) {
+        let maxPoints = 0;
+        for (const [, cluster] of this.clusters) {
+            if (cluster.pointCloud) {
+                maxPoints = Math.max(maxPoints, cluster.pointCloud.geometry.attributes.position.count);
+            }
+        }
+        let totalChildPoints = 0;
+        for (const [, cluster] of this.clusters) {
+            if (cluster.pointCloud) {
+                totalChildPoints += cluster.pointCloud.geometry.attributes.position.count;
+            }
+        }
+        const bufSize = Math.max(maxPoints, totalChildPoints);
+
+        this.matchedStartBuf = new Float32Array(bufSize * 3);
+        this.matchedEndBuf = new Float32Array(bufSize * 3);
+        this.coStartBuf = new Float32Array(bufSize * 3);
+        this.coEndBuf = new Float32Array(bufSize * 3);
+        this.moStartBuf = new Float32Array(bufSize * 3);
+        this.moEndBuf = new Float32Array(bufSize * 3);
+
+        const makeCloud = (opacity) => {
+            const geom = new THREE.BufferGeometry();
+            const p = new THREE.BufferAttribute(new Float32Array(bufSize * 3), 3);
+            p.setUsage(THREE.DynamicDrawUsage);
+            const c = new THREE.BufferAttribute(new Float32Array(bufSize * 3), 3);
+            c.setUsage(THREE.DynamicDrawUsage);
+            geom.setAttribute('position', p);
+            geom.setAttribute('color', c);
+            geom.setDrawRange(0, 0);
+            const mat = createPointMaterial({ opacity, depthWrite: true, blendMode, isDark });
+            const cloud = new THREE.Points(geom, mat);
+            cloud.visible = false;
+            cloud.frustumCulled = false;
+            this.worldGroup.add(cloud);
+            return cloud;
+        };
+
+        this.preMatchedCloud = makeCloud(1.0);
+        this.preChildOnlyCloud = makeCloud(1.0);
+        this.preMergedOnlyCloud = makeCloud(0.0);
+
+        console.log(`Pre-allocated transition buffers: ${bufSize} points capacity`);
+    }
+
+    updateBlendMode(blendMode, isDark = false) {
+        const clouds = [this.preMatchedCloud, this.preChildOnlyCloud, this.preMergedOnlyCloud];
+        for (const cloud of clouds) {
+            if (cloud && cloud.material) {
+                applyBlendMode(cloud.material, blendMode, isDark);
+            }
+        }
     }
 
     initTimeline() {
@@ -29,63 +85,102 @@ export class SquarenessAnimationEngine {
             return [];
         }
 
-        const leaves = [];
-        const merges = [];
+        const allEvents = [];
         for (const node of treeNodes) {
-            if (node.children.length === 0) leaves.push(node);
-            else merges.push(node);
-        }
-
-        leaves.sort((a, b) => {
-            if (b.depth !== a.depth) return b.depth - a.depth;
-            return a.cluster.path.localeCompare(b.cluster.path);
-        });
-        merges.sort((a, b) => {
-            if (b.depth !== a.depth) return b.depth - a.depth;
-            return a.cluster.path.localeCompare(b.cluster.path);
-        });
-
-        for (const node of leaves) {
-            this.mergeEvents.push({
+            const isLeaf = node.children.length === 0;
+            allEvents.push({
                 path: node.cluster.path,
                 cluster: node.cluster,
-                isLeaf: true,
-                children: [],
-                depth: node.depth
-            });
-        }
-        for (const node of merges) {
-            this.mergeEvents.push({
-                path: node.cluster.path,
-                cluster: node.cluster,
-                isLeaf: false,
-                children: node.children.map(c => c.cluster.path),
-                depth: node.depth
+                isLeaf,
+                children: isLeaf ? [] : node.children.map(c => c.cluster.path),
+                depth: node.depth,
+                timestamp: node.cluster.timestamp || 0
             });
         }
 
-        console.log(`Timeline: ${this.mergeEvents.length} events (${leaves.length} leaves + ${merges.length} merges)`);
+        const hasTimestamps = allEvents.some(e => e.timestamp > 0);
+
+        if (hasTimestamps) {
+            allEvents.sort((a, b) => {
+                if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+                if (a.isLeaf !== b.isLeaf) return a.isLeaf ? -1 : 1;
+                return a.cluster.path.localeCompare(b.cluster.path);
+            });
+
+            const TOTAL_ANIMATION_SEC = 20;
+            const MIN_GAP_SEC = 0.5;
+            const MAX_GAP_SEC = 1.2;
+            const epochs = allEvents.map(e => e.timestamp);
+            const minEpoch = Math.min(...epochs);
+            const maxEpoch = Math.max(...epochs);
+            const realSpan = maxEpoch - minEpoch;
+
+            for (let i = 0; i < allEvents.length; i++) {
+                if (realSpan > 0) {
+                    const normalizedT = (allEvents[i].timestamp - minEpoch) / realSpan;
+                    allEvents[i].animationTime = normalizedT * TOTAL_ANIMATION_SEC;
+                } else {
+                    allEvents[i].animationTime = i * 1.0;
+                }
+            }
+
+            for (let i = 1; i < allEvents.length; i++) {
+                const gap = allEvents[i].animationTime - allEvents[i - 1].animationTime;
+                if (gap < MIN_GAP_SEC) {
+                    allEvents[i].animationTime = allEvents[i - 1].animationTime + MIN_GAP_SEC;
+                }
+            }
+
+            for (let i = 0; i < allEvents.length; i++) {
+                if (i === 0) {
+                    allEvents[i].delay = 0.5;
+                } else {
+                    allEvents[i].delay = Math.min(
+                        allEvents[i].animationTime - allEvents[i - 1].animationTime,
+                        MAX_GAP_SEC
+                    );
+                }
+            }
+        } else {
+            const leaves = allEvents.filter(e => e.isLeaf);
+            const merges = allEvents.filter(e => !e.isLeaf);
+            leaves.sort((a, b) => b.depth - a.depth || a.cluster.path.localeCompare(b.cluster.path));
+            merges.sort((a, b) => b.depth - a.depth || a.cluster.path.localeCompare(b.cluster.path));
+            allEvents.length = 0;
+            allEvents.push(...leaves, ...merges);
+            for (const e of allEvents) e.delay = 1.0;
+        }
+
+        this.mergeEvents = allEvents;
+
+        const leaves = allEvents.filter(e => e.isLeaf).length;
+        const merges = allEvents.filter(e => !e.isLeaf).length;
+        console.log(`Timeline: ${this.mergeEvents.length} events (${leaves} leaves + ${merges} merges)`);
+        if (hasTimestamps) {
+            for (const e of this.mergeEvents) {
+                const ts = e.timestamp ? new Date(e.timestamp * 1000).toLocaleTimeString() : '?';
+                console.log(`  ${ts} [${e.delay.toFixed(1)}s gap] ${e.isLeaf ? 'LEAF' : 'MERGE'} ${e.path}`);
+            }
+        }
         return this.mergeEvents;
     }
 
-    cleanupTransitions() {
-        for (const cloud of this.transitionClouds) {
-            this.worldGroup.remove(cloud);
-            cloud.geometry.dispose();
-            cloud.material.dispose();
-        }
-        this.transitionClouds = [];
+    hideTransitionClouds() {
+        if (this.preMatchedCloud) this.preMatchedCloud.visible = false;
+        if (this.preChildOnlyCloud) this.preChildOnlyCloud.visible = false;
+        if (this.preMergedOnlyCloud) this.preMergedOnlyCloud.visible = false;
         this.activeAnimations = this.activeAnimations.filter(a => a.type !== 'mergeTransition');
     }
 
     applyEventInstant(eventIndex) {
-        this.cleanupTransitions();
+        this.hideTransitionClouds();
         this.activeAnimations = [];
 
         for (const cluster of this.clusters.values()) {
             if (cluster.pointCloud) {
                 cluster.pointCloud.visible = false;
-                cluster.pointCloud.material.opacity = 1;
+                cluster.pointCloud.material.uniforms.uOpacity.value = 1;
+                cluster.pointCloud.material.depthWrite = true;
             }
             if (cluster.hierarchyPosition) {
                 cluster.group.position.copy(cluster.hierarchyPosition);
@@ -126,19 +221,20 @@ export class SquarenessAnimationEngine {
                 this.playMergeTransition(evt);
             }
         } else {
-            this.cleanupTransitions();
+            this.hideTransitionClouds();
             if (evt.isLeaf) {
                 if (evt.cluster.pointCloud) this.animateFadeOut(evt.cluster);
             } else {
                 if (evt.cluster.pointCloud) {
                     evt.cluster.pointCloud.visible = false;
-                    evt.cluster.pointCloud.material.opacity = 1;
+                    evt.cluster.pointCloud.material.uniforms.uOpacity.value = 1;
                 }
                 for (const childPath of evt.children) {
                     const child = this.clusters.get(childPath);
                     if (child && child.pointCloud) {
                         child.pointCloud.visible = true;
-                        child.pointCloud.material.opacity = 1;
+                        child.pointCloud.material.uniforms.uOpacity.value = 1;
+                        child.pointCloud.material.depthWrite = true;
                         child.group.position.copy(child.hierarchyPosition);
                         if (child.fitScale) child.group.scale.setScalar(child.fitScale);
                     }
@@ -167,39 +263,44 @@ export class SquarenessAnimationEngine {
 
         const { matchedPairs, childOnlyPoints, mergedOnlyIndices } = matchData;
 
+        const fadingChildren = [];
         for (const childPath of evt.children) {
             const child = this.clusters.get(childPath);
-            if (child && child.pointCloud) child.pointCloud.visible = false;
+            if (child && child.pointCloud && child.pointCloud.visible) {
+                fadingChildren.push(child);
+            }
         }
-        merged.pointCloud.visible = false;
 
-        // --- Matched points cloud ---
         const mLen = matchedPairs.length;
-        const matchedStart = new Float32Array(mLen * 3);
-        const matchedEnd = new Float32Array(mLen * 3);
-        const matchedColors = new Float32Array(mLen * 3);
+        const coLen = childOnlyPoints.length;
+        const moLen = mergedOnlyIndices.length;
+
+        const mStart = this.matchedStartBuf;
+        const mEnd = this.matchedEndBuf;
+        const mPos = this.preMatchedCloud.geometry.attributes.position.array;
+        const mCol = this.preMatchedCloud.geometry.attributes.color.array;
 
         for (let i = 0; i < mLen; i++) {
             const pair = matchedPairs[i];
             const child = this.clusters.get(pair.childPath);
             if (!child || !child.pointCloud) continue;
-
-            this.writeWorldPos(child, pair.childIdx, matchedStart, i * 3);
-            this.writeWorldPos(merged, pair.mergedIdx, matchedEnd, i * 3);
-            this.writeColor(child, pair.childIdx, matchedColors, i * 3);
+            this.writeWorldPos(child, pair.childIdx, mStart, i * 3);
+            this.writeWorldPos(merged, pair.mergedIdx, mEnd, i * 3);
+            this.writeColor(child, pair.childIdx, mCol, i * 3);
+            mPos[i * 3] = mStart[i * 3];
+            mPos[i * 3 + 1] = mStart[i * 3 + 1];
+            mPos[i * 3 + 2] = mStart[i * 3 + 2];
         }
+        this.preMatchedCloud.geometry.attributes.position.needsUpdate = true;
+        this.preMatchedCloud.geometry.attributes.color.needsUpdate = true;
+        this.preMatchedCloud.geometry.setDrawRange(0, mLen);
+        this.preMatchedCloud.material.uniforms.uOpacity.value = 1.0;
+        this.preMatchedCloud.visible = true;
 
-        const matchedGeom = new THREE.BufferGeometry();
-        matchedGeom.setAttribute('position', new THREE.Float32BufferAttribute(matchedStart.slice(), 3));
-        matchedGeom.setAttribute('color', new THREE.Float32BufferAttribute(matchedColors, 3));
-        const matchedMat = this.makeTransitionMaterial(1.0);
-        const matchedCloud = new THREE.Points(matchedGeom, matchedMat);
-
-        // --- Child-only cloud (fly to nearest merged point) ---
-        const coLen = childOnlyPoints.length;
-        const coStart = new Float32Array(coLen * 3);
-        const coEnd = new Float32Array(coLen * 3);
-        const coCol = new Float32Array(coLen * 3);
+        const coStart = this.coStartBuf;
+        const coEnd = this.coEndBuf;
+        const coPos = this.preChildOnlyCloud.geometry.attributes.position.array;
+        const coCol = this.preChildOnlyCloud.geometry.attributes.color.array;
 
         for (let i = 0; i < coLen; i++) {
             const cp = childOnlyPoints[i];
@@ -214,19 +315,20 @@ export class SquarenessAnimationEngine {
                 coEnd[i * 3 + 1] = coStart[i * 3 + 1];
                 coEnd[i * 3 + 2] = coStart[i * 3 + 2];
             }
+            coPos[i * 3] = coStart[i * 3];
+            coPos[i * 3 + 1] = coStart[i * 3 + 1];
+            coPos[i * 3 + 2] = coStart[i * 3 + 2];
         }
+        this.preChildOnlyCloud.geometry.attributes.position.needsUpdate = true;
+        this.preChildOnlyCloud.geometry.attributes.color.needsUpdate = true;
+        this.preChildOnlyCloud.geometry.setDrawRange(0, coLen);
+        this.preChildOnlyCloud.material.uniforms.uOpacity.value = 1.0;
+        this.preChildOnlyCloud.visible = true;
 
-        const coGeom = new THREE.BufferGeometry();
-        coGeom.setAttribute('position', new THREE.Float32BufferAttribute(coStart.slice(), 3));
-        coGeom.setAttribute('color', new THREE.Float32BufferAttribute(coCol, 3));
-        const coMat = this.makeTransitionMaterial(1.0);
-        const childOnlyCloud = new THREE.Points(coGeom, coMat);
-
-        // --- Merged-only cloud (fly from nearest child point) ---
-        const moLen = mergedOnlyIndices.length;
-        const moStart = new Float32Array(moLen * 3);
-        const moEnd = new Float32Array(moLen * 3);
-        const moCol = new Float32Array(moLen * 3);
+        const moStart = this.moStartBuf;
+        const moEnd = this.moEndBuf;
+        const moPos = this.preMergedOnlyCloud.geometry.attributes.position.array;
+        const moCol = this.preMergedOnlyCloud.geometry.attributes.color.array;
 
         for (let i = 0; i < moLen; i++) {
             const entry = mergedOnlyIndices[i];
@@ -247,42 +349,52 @@ export class SquarenessAnimationEngine {
                 moStart[i * 3 + 1] = moEnd[i * 3 + 1];
                 moStart[i * 3 + 2] = moEnd[i * 3 + 2];
             }
+            moPos[i * 3] = moStart[i * 3];
+            moPos[i * 3 + 1] = moStart[i * 3 + 1];
+            moPos[i * 3 + 2] = moStart[i * 3 + 2];
         }
+        this.preMergedOnlyCloud.geometry.attributes.position.needsUpdate = true;
+        this.preMergedOnlyCloud.geometry.attributes.color.needsUpdate = true;
+        this.preMergedOnlyCloud.geometry.setDrawRange(0, moLen);
+        this.preMergedOnlyCloud.material.uniforms.uOpacity.value = 0.0;
+        this.preMergedOnlyCloud.visible = true;
 
-        const moGeom = new THREE.BufferGeometry();
-        moGeom.setAttribute('position', new THREE.Float32BufferAttribute(moStart.slice(), 3));
-        moGeom.setAttribute('color', new THREE.Float32BufferAttribute(moCol, 3));
-        const moMat = this.makeTransitionMaterial(0.0);
-        const mergedOnlyCloud = new THREE.Points(moGeom, moMat);
+        for (const child of fadingChildren) {
+            if (child.pointCloud) {
+                child.pointCloud.material.uniforms.uOpacity.value = 0;
+                child.pointCloud.material.depthWrite = false;
+            }
+        }
+        merged.pointCloud.visible = false;
 
-        this.worldGroup.add(matchedCloud);
-        this.worldGroup.add(childOnlyCloud);
-        this.worldGroup.add(mergedOnlyCloud);
-        this.transitionClouds.push(matchedCloud, childOnlyCloud, mergedOnlyCloud);
+        if (this.particleEngine && merged.hierarchyPosition) {
+            const mergeRadius = merged.radius * (merged.fitScale || 1);
+            this.particleEngine.trigger(merged.hierarchyPosition, mergeRadius);
+        }
 
         this.activeAnimations.push({
             type: 'mergeTransition',
-            matchedCloud, childOnlyCloud, mergedOnlyCloud,
-            matchedStart, matchedEnd,
             matchedCount: mLen,
-            coStart, coEnd, coCount: coLen,
-            moStart, moEnd, moCount: moLen,
+            coCount: coLen,
+            moCount: moLen,
             mergedCluster: merged,
             childPaths: evt.children,
+            fadingChildren,
             startTime: performance.now(),
             duration: this.mergeDuration * 1000,
             onComplete: () => {
-                this.worldGroup.remove(matchedCloud);
-                this.worldGroup.remove(childOnlyCloud);
-                this.worldGroup.remove(mergedOnlyCloud);
-                matchedGeom.dispose(); matchedMat.dispose();
-                coGeom.dispose(); coMat.dispose();
-                moGeom.dispose(); moMat.dispose();
-                this.transitionClouds = this.transitionClouds.filter(
-                    c => c !== matchedCloud && c !== childOnlyCloud && c !== mergedOnlyCloud
-                );
+                this.preMatchedCloud.visible = false;
+                this.preChildOnlyCloud.visible = false;
+                this.preMergedOnlyCloud.visible = false;
+                for (const child of fadingChildren) {
+                    if (child.pointCloud) {
+                        child.pointCloud.visible = false;
+                        child.pointCloud.material.uniforms.uOpacity.value = 1;
+                        child.pointCloud.material.depthWrite = true;
+                    }
+                }
                 merged.pointCloud.visible = true;
-                merged.pointCloud.material.opacity = 1;
+                merged.pointCloud.material.uniforms.uOpacity.value = 1;
             }
         });
     }
@@ -303,20 +415,9 @@ export class SquarenessAnimationEngine {
         out[offset + 2] = col.getZ(localIdx);
     }
 
-    makeTransitionMaterial(opacity) {
-        return new THREE.PointsMaterial({
-            size: 5.0,
-            vertexColors: true,
-            sizeAttenuation: false,
-            transparent: true,
-            opacity,
-            depthWrite: false
-        });
-    }
-
     animateFadeIn(cluster) {
         if (!cluster.pointCloud) return;
-        cluster.pointCloud.material.opacity = 0;
+        cluster.pointCloud.material.uniforms.uOpacity.value = 0;
         cluster.pointCloud.material.transparent = true;
         this.activeAnimations.push({
             type: 'fadeIn', cluster,
@@ -334,7 +435,7 @@ export class SquarenessAnimationEngine {
             duration: this.leafFadeDuration * 1000,
             onComplete: () => {
                 cluster.pointCloud.visible = false;
-                cluster.pointCloud.material.opacity = 1;
+                cluster.pointCloud.material.uniforms.uOpacity.value = 1;
             }
         });
     }
@@ -351,7 +452,7 @@ export class SquarenessAnimationEngine {
             duration: this.mergeDuration * 1000,
             onComplete: () => {
                 child.pointCloud.visible = false;
-                child.pointCloud.material.opacity = 1;
+                child.pointCloud.material.uniforms.uOpacity.value = 1;
                 child.group.position.copy(child.hierarchyPosition);
                 child.group.scale.setScalar(startScale);
             }
@@ -367,48 +468,53 @@ export class SquarenessAnimationEngine {
 
             switch (a.type) {
                 case 'fadeIn':
-                    a.cluster.pointCloud.material.opacity = e;
+                    a.cluster.pointCloud.material.uniforms.uOpacity.value = e;
                     break;
 
                 case 'fadeOut':
-                    a.cluster.pointCloud.material.opacity = 1 - e;
+                    a.cluster.pointCloud.material.uniforms.uOpacity.value = 1 - e;
                     break;
 
                 case 'fallbackMerge':
                     a.cluster.group.position.lerpVectors(a.startPos, a.endPos, e);
                     a.cluster.group.scale.setScalar(a.startScale * (1 - e * 0.5));
-                    a.cluster.pointCloud.material.opacity = 1 - e * 0.85;
+                    a.cluster.pointCloud.material.uniforms.uOpacity.value = 1 - e * 0.85;
                     break;
 
                 case 'mergeTransition': {
-                    const mArr = a.matchedCloud.geometry.attributes.position.array;
+                    const mArr = this.preMatchedCloud.geometry.attributes.position.array;
+                    const ms = this.matchedStartBuf, me = this.matchedEndBuf;
                     for (let j = 0; j < a.matchedCount; j++) {
                         const j3 = j * 3;
-                        mArr[j3]     = a.matchedStart[j3]     + (a.matchedEnd[j3]     - a.matchedStart[j3])     * e;
-                        mArr[j3 + 1] = a.matchedStart[j3 + 1] + (a.matchedEnd[j3 + 1] - a.matchedStart[j3 + 1]) * e;
-                        mArr[j3 + 2] = a.matchedStart[j3 + 2] + (a.matchedEnd[j3 + 2] - a.matchedStart[j3 + 2]) * e;
+                        mArr[j3]     = ms[j3]     + (me[j3]     - ms[j3])     * e;
+                        mArr[j3 + 1] = ms[j3 + 1] + (me[j3 + 1] - ms[j3 + 1]) * e;
+                        mArr[j3 + 2] = ms[j3 + 2] + (me[j3 + 2] - ms[j3 + 2]) * e;
                     }
-                    a.matchedCloud.geometry.attributes.position.needsUpdate = true;
+                    this.preMatchedCloud.geometry.attributes.position.needsUpdate = true;
 
-                    const coArr = a.childOnlyCloud.geometry.attributes.position.array;
+                    const coArr = this.preChildOnlyCloud.geometry.attributes.position.array;
+                    const cs = this.coStartBuf, ce = this.coEndBuf;
                     for (let j = 0; j < a.coCount; j++) {
                         const j3 = j * 3;
-                        coArr[j3]     = a.coStart[j3]     + (a.coEnd[j3]     - a.coStart[j3])     * e;
-                        coArr[j3 + 1] = a.coStart[j3 + 1] + (a.coEnd[j3 + 1] - a.coStart[j3 + 1]) * e;
-                        coArr[j3 + 2] = a.coStart[j3 + 2] + (a.coEnd[j3 + 2] - a.coStart[j3 + 2]) * e;
+                        coArr[j3]     = cs[j3]     + (ce[j3]     - cs[j3])     * e;
+                        coArr[j3 + 1] = cs[j3 + 1] + (ce[j3 + 1] - cs[j3 + 1]) * e;
+                        coArr[j3 + 2] = cs[j3 + 2] + (ce[j3 + 2] - cs[j3 + 2]) * e;
                     }
-                    a.childOnlyCloud.geometry.attributes.position.needsUpdate = true;
-                    a.childOnlyCloud.material.opacity = 1 - e * 0.3;
+                    this.preChildOnlyCloud.geometry.attributes.position.needsUpdate = true;
 
-                    const moArr = a.mergedOnlyCloud.geometry.attributes.position.array;
+                    const moArr = this.preMergedOnlyCloud.geometry.attributes.position.array;
+                    const mos = this.moStartBuf, moe = this.moEndBuf;
                     for (let j = 0; j < a.moCount; j++) {
                         const j3 = j * 3;
-                        moArr[j3]     = a.moStart[j3]     + (a.moEnd[j3]     - a.moStart[j3])     * e;
-                        moArr[j3 + 1] = a.moStart[j3 + 1] + (a.moEnd[j3 + 1] - a.moStart[j3 + 1]) * e;
-                        moArr[j3 + 2] = a.moStart[j3 + 2] + (a.moEnd[j3 + 2] - a.moStart[j3 + 2]) * e;
+                        moArr[j3]     = mos[j3]     + (moe[j3]     - mos[j3])     * e;
+                        moArr[j3 + 1] = mos[j3 + 1] + (moe[j3 + 1] - mos[j3 + 1]) * e;
+                        moArr[j3 + 2] = mos[j3 + 2] + (moe[j3 + 2] - mos[j3 + 2]) * e;
                     }
-                    a.mergedOnlyCloud.geometry.attributes.position.needsUpdate = true;
-                    a.mergedOnlyCloud.material.opacity = e;
+                    this.preMergedOnlyCloud.geometry.attributes.position.needsUpdate = true;
+
+                    this.preMatchedCloud.material.uniforms.uOpacity.value = 1.0;
+                    this.preChildOnlyCloud.material.uniforms.uOpacity.value = 1.0 - t;
+                    this.preMergedOnlyCloud.material.uniforms.uOpacity.value = t;
                     break;
                 }
             }
@@ -418,6 +524,12 @@ export class SquarenessAnimationEngine {
                 this.activeAnimations.splice(i, 1);
             }
         }
+    }
+
+    getLeafClusters() {
+        return this.mergeEvents
+            .filter(e => e.isLeaf)
+            .map(e => e.cluster);
     }
 
     easeInOutCubic(t) {

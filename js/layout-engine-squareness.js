@@ -12,7 +12,8 @@ export class SquarenessLayoutEngine {
         this.rootCluster = clusters.get('merged');
         this.bounds = null;
         this.treeNodes = [];
-        this.PADDING_FRAC = 0.015;
+        this.PADDING_FRAC = 0.004;
+        this.leafRadiusMap = new Map();
     }
 
     compositions(n) {
@@ -107,17 +108,24 @@ export class SquarenessLayoutEngine {
 
         const leaves = this.treeNodes.filter(n => n.children.length === 0);
         const leafCount = leaves.length;
-        const radii = Array.from(this.clusters.values())
-            .filter(c => c.radius > 0).map(c => c.radius);
-        const maxRadius = radii.length > 0 ? Math.max(...radii) : 1;
 
-        const tileSize = maxRadius * 2.2;
-        const totalArea = tileSize * tileSize * leafCount * 1.1;
+        this.leafRadiusMap.clear();
+        for (const leaf of leaves) {
+            const r = leaf.cluster.radius > 0 ? leaf.cluster.radius : 1;
+            this.leafRadiusMap.set(leaf.cluster.path, r);
+        }
+
+        let totalArea = 0;
+        for (const leaf of leaves) {
+            const r = this.leafRadiusMap.get(leaf.cluster.path);
+            totalArea += (2.0 * r) * (2.0 * r);
+        }
+        totalArea *= 1.0;
         const aspect = 16 / 9;
         const ROOT_H = Math.sqrt(totalArea / aspect);
         const ROOT_W = ROOT_H * aspect;
 
-        console.log(`Leaves: ${leafCount}, maxRadius: ${maxRadius.toFixed(1)}`);
+        console.log(`Leaves: ${leafCount}, radii: [${leaves.map(l => this.leafRadiusMap.get(l.cluster.path).toFixed(1)).join(', ')}]`);
         console.log(`Root rect: ${ROOT_W.toFixed(0)} x ${ROOT_H.toFixed(0)}`);
 
         const rootRect = { x: -ROOT_W / 2, y: -ROOT_H / 2, w: ROOT_W, h: ROOT_H };
@@ -137,7 +145,7 @@ export class SquarenessLayoutEngine {
                 c.group.position.copy(c.hierarchyPosition);
 
                 if (c.radius > 0) {
-                    const fitDim = Math.min(c.rect.w, c.rect.h) * 0.85;
+                    const fitDim = Math.min(c.rect.w, c.rect.h) * 0.96;
                     c.fitScale = fitDim / (2 * c.radius);
                     c.group.scale.setScalar(c.fitScale);
                 }
@@ -155,7 +163,7 @@ export class SquarenessLayoutEngine {
                     c.group.position.copy(c.hierarchyPosition);
 
                     if (c.radius > 0 && reg) {
-                        const fitDim = Math.min(reg.w, reg.h) * 0.85;
+                        const fitDim = Math.min(reg.w, reg.h) * 0.96;
                         c.fitScale = fitDim / (2 * c.radius);
                         c.group.scale.setScalar(c.fitScale);
                     }
@@ -168,8 +176,8 @@ export class SquarenessLayoutEngine {
         } else {
             this.bounds = {
                 minX, maxX, minY, maxY,
-                width: maxX - minX + 40,
-                height: maxY - minY + 40
+                width: maxX - minX + 2,
+                height: maxY - minY + 2
             };
         }
 
@@ -181,11 +189,14 @@ export class SquarenessLayoutEngine {
         console.log("=== SQUARENESS LAYOUT COMPLETE ===\n");
     }
 
-    countLeaves(node) {
+    sumLeafWeights(node) {
         if (!node) return 0;
-        if (node.children.length === 0) return 1;
+        if (node.children.length === 0) {
+            const r = this.leafRadiusMap.get(node.cluster.path) || 1;
+            return r * r;
+        }
         let sum = 0;
-        for (const child of node.children) sum += this.countLeaves(child);
+        for (const child of node.children) sum += this.sumLeafWeights(child);
         return sum;
     }
 
@@ -198,7 +209,7 @@ export class SquarenessLayoutEngine {
 
         const children = node.children;
         const n = children.length;
-        const weights = children.map(c => this.countLeaves(c));
+        const weights = children.map(c => this.sumLeafWeights(c));
         const totalWeight = weights.reduce((a, b) => a + b, 0);
         const pad = Math.min(rect.w, rect.h) * this.PADDING_FRAC;
 
