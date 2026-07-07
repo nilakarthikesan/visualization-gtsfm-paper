@@ -4,16 +4,16 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader } from './data-loader-vggt.js?v=39';
-import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=39';
+import { VGGTDataLoader } from './data-loader-vggt.js?v=40';
+import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=40';
 import { InteractionEngine } from './interaction-engine.js?v=5';
-import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=39';
-import { CameraEngine } from './camera-engine.js?v=39';
-import { updatePointScale, applyBlendMode, BLEND_MODES } from './point-material.js?v=39';
+import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=40';
+import { CameraEngine } from './camera-engine.js?v=40';
+import { updatePointScale, applyBlendMode, BLEND_MODES } from './point-material.js?v=40';
 import { FrustumEngine } from './frustum-engine.js?v=29';
-import { EDLPass } from './edl-pass.js?v=39';
-import { ParticleEngine } from './particle-engine.js?v=39';
-import { ConvergenceEngine } from './convergence-engine.js?v=39';
+import { EDLPass } from './edl-pass.js?v=40';
+import { ParticleEngine } from './particle-engine.js?v=40';
+import { ConvergenceEngine } from './convergence-engine.js?v=40';
 
 const VignetteShader = {
     uniforms: {
@@ -89,7 +89,6 @@ class VGGTHierarchyApp {
         this.vignetteEnabled = localStorage.getItem('gh-vignette') !== 'false';
         this.particlesEnabled = localStorage.getItem('gh-particles') === 'true';
         this.cameraMode = 'free';
-        this.phase = 'loading';
         this.initThree();
         this.initUI();
     }
@@ -307,11 +306,6 @@ class VGGTHierarchyApp {
         
         this.ui.track.addEventListener('click', (e) => {
             if (!this.animationEngine) return;
-            if (this.phase === 'convergence') {
-                this.convergenceEngine.skipToEnd();
-                this.transitionToMergePhase();
-                return;
-            }
             const rect = this.ui.track.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
             const index = Math.floor(pct * this.animationEngine.mergeEvents.length);
@@ -377,6 +371,34 @@ class VGGTHierarchyApp {
                 this.edlEnabled = e.target.checked;
                 this.edlPass.enabled = this.edlEnabled;
                 localStorage.setItem('gh-edl', this.edlEnabled);
+            });
+        }
+
+        const edlStrengthSlider = document.getElementById('slider-edl-strength');
+        if (edlStrengthSlider) {
+            const savedStr = parseFloat(localStorage.getItem('gh-edl-strength'));
+            if (!isNaN(savedStr)) {
+                edlStrengthSlider.value = savedStr;
+                if (this.edlPass) this.edlPass.edlStrength = savedStr;
+            }
+            edlStrengthSlider.addEventListener('input', (e) => {
+                const v = parseFloat(e.target.value);
+                if (this.edlPass) this.edlPass.edlStrength = v;
+                localStorage.setItem('gh-edl-strength', v);
+            });
+        }
+
+        const edlRadiusSlider = document.getElementById('slider-edl-radius');
+        if (edlRadiusSlider) {
+            const savedRad = parseFloat(localStorage.getItem('gh-edl-radius'));
+            if (!isNaN(savedRad)) {
+                edlRadiusSlider.value = savedRad;
+                if (this.edlPass) this.edlPass.edlRadius = savedRad;
+            }
+            edlRadiusSlider.addEventListener('input', (e) => {
+                const v = parseFloat(e.target.value);
+                if (this.edlPass) this.edlPass.edlRadius = v;
+                localStorage.setItem('gh-edl-radius', v);
             });
         }
 
@@ -446,6 +468,15 @@ class VGGTHierarchyApp {
                 localStorage.setItem('gh-saturation', v);
             });
         }
+
+        const colorModeSelect = document.getElementById('color-mode-select');
+        if (colorModeSelect) {
+            const savedMode = localStorage.getItem('gh-color-mode') || 'rgb';
+            colorModeSelect.value = savedMode;
+            colorModeSelect.addEventListener('change', (e) => {
+                this.setColorMode(e.target.value);
+            });
+        }
     }
 
     setCameraMode(mode) {
@@ -458,6 +489,74 @@ class VGGTHierarchyApp {
             this.cameraEngine.startOrbitPath(this.orbitControls.target.clone());
         } else if (mode === 'cinematic') {
             this.cameraEngine.startCinematicPath(this.orbitControls.target.clone());
+        }
+    }
+
+    initColorModes() {
+        this.colorMode = 'rgb';
+        this.originalColors = new Map();
+        this.clusterHues = new Map();
+
+        for (const [path, cluster] of this.dataLoader.clusters) {
+            if (!cluster.pointCloud || !cluster.pointCloud.geometry) continue;
+            const colorAttr = cluster.pointCloud.geometry.attributes.color;
+            if (colorAttr) {
+                this.originalColors.set(path, new Float32Array(colorAttr.array));
+            }
+        }
+
+        const paths = [...this.dataLoader.clusters.keys()];
+        const goldenAngle = 137.508;
+        for (let i = 0; i < paths.length; i++) {
+            this.clusterHues.set(paths[i], (i * goldenAngle) % 360);
+        }
+    }
+
+    setColorMode(mode) {
+        this.colorMode = mode;
+        localStorage.setItem('gh-color-mode', mode);
+
+        for (const [path, cluster] of this.dataLoader.clusters) {
+            if (!cluster.pointCloud || !cluster.pointCloud.geometry) continue;
+            const colorAttr = cluster.pointCloud.geometry.attributes.color;
+            if (!colorAttr) continue;
+            const arr = colorAttr.array;
+            const count = colorAttr.count;
+
+            if (mode === 'rgb') {
+                const orig = this.originalColors.get(path);
+                if (orig) {
+                    for (let i = 0; i < orig.length; i++) arr[i] = orig[i];
+                }
+            } else if (mode === 'cluster') {
+                const hue = this.clusterHues.get(path) || 0;
+                const c = new THREE.Color();
+                c.setHSL(hue / 360, 0.75, 0.55);
+                for (let i = 0; i < count; i++) {
+                    arr[i * 3]     = c.r;
+                    arr[i * 3 + 1] = c.g;
+                    arr[i * 3 + 2] = c.b;
+                }
+            } else if (mode === 'depth') {
+                const posAttr = cluster.pointCloud.geometry.attributes.position;
+                let minY = Infinity, maxY = -Infinity;
+                for (let i = 0; i < count; i++) {
+                    const y = posAttr.getY(i);
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+                const range = maxY - minY || 1;
+                const c = new THREE.Color();
+                for (let i = 0; i < count; i++) {
+                    const t = (posAttr.getY(i) - minY) / range;
+                    c.setHSL(0.67 - t * 0.67, 0.9, 0.45 + t * 0.15);
+                    arr[i * 3]     = c.r;
+                    arr[i * 3 + 1] = c.g;
+                    arr[i * 3 + 2] = c.b;
+                }
+            }
+
+            colorAttr.needsUpdate = true;
         }
     }
 
@@ -502,10 +601,16 @@ class VGGTHierarchyApp {
             this.layoutEngine = new SquarenessLayoutEngine(clusters);
             this.layoutEngine.computeLayout();
 
+            this.convergenceEngine = new ConvergenceEngine();
+
             this.animationEngine = new SquarenessAnimationEngine(clusters, this.layoutEngine, this.worldGroup);
+            this.animationEngine.convergenceEngine = this.convergenceEngine;
             this.animationEngine.initTransitionBuffers(this.blendMode, this.isDark);
             this.events = this.animationEngine.initTimeline();
             this.currentEventIndex = 0;
+
+            const leafClusters = this.animationEngine.getLeafClusters();
+            this.convergenceEngine.prepareAllLeaves(leafClusters);
 
             this.interactionEngine = new InteractionEngine(
                 this.camera, 
@@ -528,31 +633,29 @@ class VGGTHierarchyApp {
             this.cameraEngine.saveDefault();
             this.cameraEngine.setAutoOrbit(true);
 
-            this.convergenceEngine = new ConvergenceEngine();
-            const leafClusters = this.animationEngine.getLeafClusters();
-
-            if (leafClusters.length > 0) {
-                for (const cluster of this.dataLoader.clusters.values()) {
-                    if (cluster.pointCloud) {
-                        cluster.pointCloud.visible = false;
-                    }
-                }
-
-                this.convergenceEngine.initConvergence(leafClusters);
-                this.phase = 'convergence';
-
-                this.fitCameraToAllLeaves(true);
-                this.convergenceEngine.start();
-                this.isPlaying = true;
-                this.ui.playBtn.textContent = 'Pause';
-            } else {
-                if (this.events.length > 0) {
-                    this.animationEngine.applyEventInstant(0);
-                    this.frustumEngine.syncToEventIndex(this.events, 0);
-                }
-                this.phase = 'merge';
-                this.fitCameraToVisible(true);
+            this.initColorModes();
+            const savedColorMode = localStorage.getItem('gh-color-mode');
+            if (savedColorMode && savedColorMode !== 'rgb') {
+                this.setColorMode(savedColorMode);
             }
+
+            for (const cluster of this.dataLoader.clusters.values()) {
+                if (cluster.pointCloud) {
+                    cluster.pointCloud.visible = false;
+                }
+            }
+
+            if (this.events.length > 0) {
+                this.animationEngine.applyEventInstant(0);
+                this.frustumEngine.syncToEventIndex(this.events, 0);
+            }
+
+            this.fitCameraToAllLeaves(true);
+
+            this.isPlaying = false;
+            this.lastStepTime = 0;
+            this.lastAnimEndTime = 0;
+            this.hadActiveAnims = false;
 
             this.updateUI();
 
@@ -706,38 +809,7 @@ class VGGTHierarchyApp {
         this.cameraAnimLookFrom = this.orbitControls.target.clone();
     }
 
-    transitionToMergePhase() {
-        this.phase = 'merge';
-
-        let lastLeafIdx = -1;
-        for (let i = 0; i < this.events.length; i++) {
-            if (this.events[i].isLeaf) lastLeafIdx = i;
-        }
-        this.currentEventIndex = Math.max(0, lastLeafIdx);
-
-        if (this.events.length > 0) {
-            this.animationEngine.applyEventInstant(this.currentEventIndex);
-            this.frustumEngine.syncToEventIndex(this.events, this.currentEventIndex);
-        }
-
-        this.fitCameraToVisible(true);
-
-        this.lastStepTime = 0;
-        this.lastAnimEndTime = 0;
-        this.hadActiveAnims = false;
-
-        this.updateUI();
-    }
-
     step(direction) {
-        if (this.phase === 'convergence') {
-            if (direction > 0) {
-                this.convergenceEngine.skipToEnd();
-                this.transitionToMergePhase();
-            }
-            return;
-        }
-
         if (direction > 0) {
             if (this.currentEventIndex < this.events.length - 1) {
                 this.currentEventIndex++;
@@ -745,6 +817,9 @@ class VGGTHierarchyApp {
                 this.frustumEngine.syncToEventIndex(this.events, this.currentEventIndex, true);
             }
         } else {
+            if (this.finalViewActive) {
+                this.undoFinalView();
+            }
             if (this.currentEventIndex > 0) {
                 this.animationEngine.playEvent(this.currentEventIndex, -1);
                 this.currentEventIndex--;
@@ -758,6 +833,9 @@ class VGGTHierarchyApp {
     jumpTo(index) {
         if (index < 0) index = 0;
         if (index >= this.events.length) index = this.events.length - 1;
+        if (this.finalViewActive && index < this.events.length - 1) {
+            this.undoFinalView();
+        }
         this.currentEventIndex = index;
         this.animationEngine.applyEventInstant(index);
         this.frustumEngine.syncToEventIndex(this.events, index);
@@ -765,54 +843,86 @@ class VGGTHierarchyApp {
         this.updateUI();
     }
 
+    collapseToFinalView() {
+        if (this.finalViewActive) return;
+
+        const lastEvt = this.events[this.events.length - 1];
+        if (!lastEvt) return;
+        const cluster = lastEvt.cluster;
+        if (!cluster || !cluster.pointCloud) return;
+
+        this.finalViewActive = true;
+        this.finalViewCluster = cluster;
+        this.finalViewOrigPos = cluster.hierarchyPosition.clone();
+        this.finalViewOrigScale = cluster.fitScale || 1;
+
+        const geom = cluster.pointCloud.geometry;
+        geom.computeBoundingBox();
+        const box = geom.boundingBox;
+        if (!box) return;
+
+        const s = this.finalViewOrigScale;
+        const hp = cluster.hierarchyPosition;
+        const cx = hp.x + ((box.min.x + box.max.x) / 2) * s;
+        const cy = hp.y + ((box.min.y + box.max.y) / 2) * s;
+
+        this.finalViewAnim = {
+            startTime: performance.now() / 1000,
+            duration: 1.5,
+            startPos: cluster.group.position.clone(),
+            endPos: new THREE.Vector3(0, 0, 0),
+            startScale: s,
+            endScale: 1.0,
+            cluster
+        };
+
+        const halfW = (box.max.x - box.min.x) / 2;
+        const halfH = (box.max.y - box.min.y) / 2;
+        const fov = this.camera.fov;
+        const aspect = window.innerWidth / window.innerHeight;
+        const vFovRad = THREE.MathUtils.degToRad(fov / 2);
+        const hFovRad = Math.atan(aspect * Math.tan(vFovRad));
+        const distForHeight = halfH / Math.tan(vFovRad);
+        const distForWidth = halfW / Math.tan(hFovRad);
+        let dist = Math.max(distForHeight, distForWidth) * 1.2;
+        dist = Math.max(dist, 8);
+
+        this.cameraAnimTarget = new THREE.Vector3(0, 0, dist);
+        this.cameraAnimLookAt = new THREE.Vector3(0, 0, 0);
+        this.cameraAnimDuration = 1.5;
+        this.cameraAnimStart = performance.now() / 1000;
+        this.cameraAnimFrom = this.camera.position.clone();
+        this.cameraAnimLookFrom = this.orbitControls.target.clone();
+
+        this.ui.eventLabel.textContent = 'Assembled Reconstruction — Gerrard Hall';
+        this.updateAnnotation();
+    }
+
+    undoFinalView() {
+        if (!this.finalViewActive || !this.finalViewCluster) return;
+        const cluster = this.finalViewCluster;
+        cluster.group.position.copy(this.finalViewOrigPos);
+        cluster.group.scale.setScalar(this.finalViewOrigScale);
+        this.finalViewActive = false;
+        this.finalViewAnim = null;
+        this.finalViewCluster = null;
+    }
+
     reset() {
         this.isPlaying = false;
         this.ui.playBtn.textContent = 'Play';
-
-        if (this.convergenceEngine && this.convergenceEngine.clusterEntries.length > 0) {
-            for (const cluster of this.dataLoader.clusters.values()) {
-                if (cluster.pointCloud) cluster.pointCloud.visible = false;
-            }
-            this.animationEngine.hideTransitionClouds();
-            this.animationEngine.activeAnimations = [];
-            this.convergenceEngine.initConvergence(this.animationEngine.getLeafClusters());
-            this.phase = 'convergence';
-            this.fitCameraToAllLeaves(true);
-            this.updateUI();
-        } else {
-            this.jumpTo(0);
-        }
+        this.undoFinalView();
+        this.animationEngine.hideTransitionClouds();
+        this.animationEngine.activeAnimations = [];
+        this.jumpTo(0);
     }
 
     togglePlay() {
         this.isPlaying = !this.isPlaying;
         this.ui.playBtn.textContent = this.isPlaying ? 'Pause' : 'Play';
-
-        if (this.phase === 'convergence') {
-            if (this.isPlaying) {
-                if (this.convergenceEngine.isComplete) {
-                    this.reset();
-                    this.isPlaying = true;
-                    this.ui.playBtn.textContent = 'Pause';
-                }
-                if (!this.convergenceEngine.isActive && !this.convergenceEngine.isComplete) {
-                    this.convergenceEngine.start();
-                } else if (this.convergenceEngine.isPaused) {
-                    this.convergenceEngine.resume();
-                }
-            } else {
-                this.convergenceEngine.pause();
-            }
-            return;
-        }
         
         if (this.isPlaying && this.currentEventIndex >= this.events.length - 1) {
-            this.reset();
-            this.isPlaying = true;
-            this.ui.playBtn.textContent = 'Pause';
-            if (this.phase === 'convergence' && !this.convergenceEngine.isActive) {
-                this.convergenceEngine.start();
-            }
+            this.jumpTo(0);
         }
     }
 
@@ -852,27 +962,58 @@ class VGGTHierarchyApp {
         this.ui.recordBtn.classList.add('recording');
     }
 
-    updateUI() {
-        if (this.phase === 'convergence' && this.convergenceEngine) {
-            const pct = this.convergenceEngine.progress * 100;
-            this.ui.progressBar.style.width = `${pct}%`;
+    updateAnnotation() {
+        const overlay = document.getElementById('annotation-overlay');
+        const stepEl = document.getElementById('annotation-step');
+        const titleEl = document.getElementById('annotation-title');
+        const descEl = document.getElementById('annotation-desc');
+        if (!overlay || !stepEl || !titleEl || !descEl) return;
 
-            const settled = this.convergenceEngine.clusterEntries.filter(e => e.settled).length;
-            const total = this.convergenceEngine.clusterEntries.length;
-            this.ui.eventLabel.textContent = `Forming clusters... ${settled}/${total} complete`;
-
-            let visiblePoints = 0;
-            let visibleClusters = 0;
-            for (const entry of this.convergenceEngine.clusterEntries) {
-                if (entry.cluster.pointCloud && entry.cluster.pointCloud.visible) {
-                    visibleClusters++;
-                    visiblePoints += entry.count;
-                }
-            }
-            this.ui.stats.textContent = `Clusters: ${visibleClusters} | Points: ${visiblePoints.toLocaleString()}`;
+        if (!this.events || this.events.length === 0) {
+            overlay.classList.remove('visible');
             return;
         }
 
+        const evt = this.events[this.currentEventIndex];
+        const count = this.events.length;
+        const leafCount = this.events.filter(e => e.isLeaf).length;
+        const mergeCount = count - leafCount;
+        const leafsSoFar = this.events.slice(0, this.currentEventIndex + 1).filter(e => e.isLeaf).length;
+        const mergesSoFar = this.events.slice(0, this.currentEventIndex + 1).filter(e => !e.isLeaf).length;
+
+        let step, title, desc;
+
+        if (this.finalViewActive) {
+            step = 'Final Result';
+            title = 'Assembled 3D Reconstruction';
+            desc = `All ${leafCount} VGGT clusters merged through ${mergeCount} hierarchical merge operations into a complete 3D model of Gerrard Hall.`;
+        } else if (evt.isLeaf) {
+            step = `VGGT Reconstruction ${leafsSoFar} of ${leafCount}`;
+            title = `Cluster: ${evt.path.split('/').pop()}`;
+            const parts = evt.path.split('/');
+            const parentCluster = parts.length > 1 ? parts[0] : 'root';
+            desc = `VGGT reconstructs a 3D point cloud from a subset of images assigned to partition ${parentCluster}. Points converge from scattered positions to their reconstructed coordinates.`;
+        } else {
+            step = `Hierarchical Merge ${mergesSoFar} of ${mergeCount}`;
+            const childNames = evt.children.map(c => c.split('/').pop()).join(' + ');
+            title = `Merging: ${childNames}`;
+            const matchInfo = evt.cluster.matchData;
+            if (matchInfo) {
+                const total = matchInfo.matchedPairs.length + matchInfo.childOnlyPoints.length + matchInfo.mergedOnlyIndices.length;
+                const matchPct = ((matchInfo.matchedPairs.length / total) * 100).toFixed(0);
+                desc = `Aligning and fusing child clusters using nearest-neighbor point matching. ${matchInfo.matchedPairs.length} matched point pairs (${matchPct}%) guide the transition.`;
+            } else {
+                desc = `Child clusters are aligned and merged using spatial proximity, creating a more complete reconstruction.`;
+            }
+        }
+
+        stepEl.textContent = step;
+        titleEl.textContent = title;
+        descEl.textContent = desc;
+        overlay.classList.add('visible');
+    }
+
+    updateUI() {
         const count = this.events.length;
         if (count === 0) return;
         
@@ -880,13 +1021,14 @@ class VGGTHierarchyApp {
         this.ui.progressBar.style.width = `${progress}%`;
         
         const event = this.events[this.currentEventIndex];
-        const eventType = event.isLeaf ? 'VGGT' : 'Merge';
+        const eventType = event.isLeaf ? 'Cluster' : 'Merge';
         let label = `Event ${this.currentEventIndex + 1}/${count}: ${eventType} — ${event.path}`;
         if (event.timestamp) {
             const d = new Date(event.timestamp * 1000);
             label += ` (${d.toLocaleTimeString()})`;
         }
         this.ui.eventLabel.textContent = label;
+        this.updateAnnotation();
         
         let visiblePoints = 0;
         let visibleClusters = 0;
@@ -927,41 +1069,48 @@ class VGGTHierarchyApp {
         const time = performance.now() / 1000;
         const dt = 0.016;
 
-        if (this.phase === 'convergence') {
-            if (this.convergenceEngine && this.convergenceEngine.isActive) {
-                this.convergenceEngine.update();
-                this.updateUI();
-
-                if (this.convergenceEngine.isComplete) {
-                    this.transitionToMergePhase();
+        if (this.isPlaying) {
+            if (!this.lastStepTime) this.lastStepTime = time;
+            const hasActiveAnims = this.animationEngine && this.animationEngine.activeAnimations.length > 0;
+            if (hasActiveAnims) {
+                this.hadActiveAnims = true;
+            } else if (this.hadActiveAnims) {
+                this.hadActiveAnims = false;
+                this.lastAnimEndTime = time;
+            }
+            const ref = Math.max(this.lastStepTime, this.lastAnimEndTime || 0);
+            const nextIdx = this.currentEventIndex + 1;
+            const nextEvent = nextIdx < this.events.length ? this.events[nextIdx] : null;
+            const delay = nextEvent && nextEvent.delay ? nextEvent.delay : 1.0;
+            if (!hasActiveAnims && time - ref > delay) {
+                if (this.currentEventIndex < this.events.length - 1) {
+                    this.step(1);
+                    this.lastStepTime = time;
+                } else {
+                    if (!this.finalViewActive) {
+                        this.collapseToFinalView();
+                    }
+                    this.togglePlay();
                 }
             }
-        } else if (this.phase === 'merge') {
-            if (this.isPlaying) {
-                if (!this.lastStepTime) this.lastStepTime = time;
-                const hasActiveAnims = this.animationEngine && this.animationEngine.activeAnimations.length > 0;
-                if (hasActiveAnims) {
-                    this.hadActiveAnims = true;
-                } else if (this.hadActiveAnims) {
-                    this.hadActiveAnims = false;
-                    this.lastAnimEndTime = time;
-                }
-                const ref = Math.max(this.lastStepTime, this.lastAnimEndTime || 0);
-                const nextIdx = this.currentEventIndex + 1;
-                const nextEvent = nextIdx < this.events.length ? this.events[nextIdx] : null;
-                const delay = nextEvent && nextEvent.delay ? nextEvent.delay : 1.0;
-                if (!hasActiveAnims && time - ref > delay) {
-                    if (this.currentEventIndex < this.events.length - 1) {
-                        this.step(1);
-                        this.lastStepTime = time;
-                    } else {
-                        this.togglePlay();
-                    }
-                }
-            } else {
-                this.lastStepTime = 0;
-                this.lastAnimEndTime = 0;
-                this.hadActiveAnims = false;
+        } else {
+            this.lastStepTime = 0;
+            this.lastAnimEndTime = 0;
+            this.hadActiveAnims = false;
+        }
+
+        if (this.finalViewAnim) {
+            const anim = this.finalViewAnim;
+            const elapsed = time - anim.startTime;
+            const t = Math.min(elapsed / anim.duration, 1);
+            const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+            anim.cluster.group.position.lerpVectors(anim.startPos, anim.endPos, e);
+            const currentScale = anim.startScale + (anim.endScale - anim.startScale) * e;
+            anim.cluster.group.scale.setScalar(currentScale);
+
+            if (t >= 1) {
+                this.finalViewAnim = null;
             }
         }
 

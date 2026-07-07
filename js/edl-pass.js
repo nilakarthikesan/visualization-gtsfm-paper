@@ -55,6 +55,12 @@ export class EDLPass extends Pass {
                     return viewZ;
                 }
 
+                float sampleEdl(vec2 center, float logDepth, vec2 offset) {
+                    float neighbor = readDepth(center + offset);
+                    if (neighbor >= uCameraFar * 0.99) return 0.0;
+                    return max(0.0, logDepth - log2(neighbor));
+                }
+
                 void main() {
                     vec4 color = texture2D(tDiffuse, vUv);
                     float depth = readDepth(vUv);
@@ -68,16 +74,26 @@ export class EDLPass extends Pass {
                     vec2 texelSize = uEdlRadius / uResolution;
 
                     float sum = 0.0;
-                    sum += max(0.0, logDepth - log2(readDepth(vUv + vec2( texelSize.x,  0.0))));
-                    sum += max(0.0, logDepth - log2(readDepth(vUv + vec2(-texelSize.x,  0.0))));
-                    sum += max(0.0, logDepth - log2(readDepth(vUv + vec2( 0.0,  texelSize.y))));
-                    sum += max(0.0, logDepth - log2(readDepth(vUv + vec2( 0.0, -texelSize.y))));
-                    sum += max(0.0, logDepth - log2(readDepth(vUv + vec2( texelSize.x,  texelSize.y) * 0.707)));
-                    sum += max(0.0, logDepth - log2(readDepth(vUv + vec2(-texelSize.x,  texelSize.y) * 0.707)));
-                    sum += max(0.0, logDepth - log2(readDepth(vUv + vec2( texelSize.x, -texelSize.y) * 0.707)));
-                    sum += max(0.0, logDepth - log2(readDepth(vUv + vec2(-texelSize.x, -texelSize.y) * 0.707)));
+                    sum += sampleEdl(vUv, logDepth, vec2( texelSize.x,  0.0));
+                    sum += sampleEdl(vUv, logDepth, vec2(-texelSize.x,  0.0));
+                    sum += sampleEdl(vUv, logDepth, vec2( 0.0,  texelSize.y));
+                    sum += sampleEdl(vUv, logDepth, vec2( 0.0, -texelSize.y));
+
+                    float diag = 0.707;
+                    sum += sampleEdl(vUv, logDepth, vec2( texelSize.x,  texelSize.y) * diag) * 0.7;
+                    sum += sampleEdl(vUv, logDepth, vec2(-texelSize.x,  texelSize.y) * diag) * 0.7;
+                    sum += sampleEdl(vUv, logDepth, vec2( texelSize.x, -texelSize.y) * diag) * 0.7;
+                    sum += sampleEdl(vUv, logDepth, vec2(-texelSize.x, -texelSize.y) * diag) * 0.7;
+
+                    sum += sampleEdl(vUv, logDepth, vec2( texelSize.x * 2.0,  0.0)) * 0.4;
+                    sum += sampleEdl(vUv, logDepth, vec2(-texelSize.x * 2.0,  0.0)) * 0.4;
+                    sum += sampleEdl(vUv, logDepth, vec2( 0.0,  texelSize.y * 2.0)) * 0.4;
+                    sum += sampleEdl(vUv, logDepth, vec2( 0.0, -texelSize.y * 2.0)) * 0.4;
+
+                    sum /= 9.6;
 
                     float shade = exp(-sum * uEdlStrength * 300.0);
+                    shade = mix(shade, 1.0, 0.15);
                     gl_FragColor = vec4(color.rgb * shade, color.a);
                 }
             `

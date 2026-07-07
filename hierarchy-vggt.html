@@ -434,6 +434,59 @@
             border-top-color: #333;
         }
         body.dark-theme .vs-tag { color: #666; }
+
+        /* Annotation overlay */
+        #annotation-overlay {
+            pointer-events: none;
+            position: fixed;
+            left: 20px;
+            bottom: 180px;
+            max-width: 340px;
+            z-index: 40;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.5s ease, transform 0.5s ease;
+        }
+        #annotation-overlay.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .annotation-card {
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid #e0e0e0;
+            border-left: 3px solid #2196F3;
+            border-radius: 8px;
+            padding: 10px 14px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        .annotation-step {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #2196F3;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .annotation-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        .annotation-desc {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.5;
+        }
+        body.dark-theme .annotation-card {
+            background: rgba(30, 30, 30, 0.92);
+            border-color: #333;
+            border-left-color: #42A5F5;
+        }
+        body.dark-theme .annotation-step { color: #64B5F6; }
+        body.dark-theme .annotation-title { color: #e0e0e0; }
+        body.dark-theme .annotation-desc { color: #999; }
     </style>
 </head>
 <body>
@@ -470,6 +523,14 @@
                     <div class="vs-row">
                         <label for="toggle-edl">Eye-Dome Lighting</label>
                         <input type="checkbox" id="toggle-edl" checked>
+                    </div>
+                    <div class="vs-row">
+                        <label for="slider-edl-strength">EDL Strength</label>
+                        <input type="range" id="slider-edl-strength" min="0.1" max="2.0" step="0.05" value="0.7">
+                    </div>
+                    <div class="vs-row">
+                        <label for="slider-edl-radius">EDL Radius</label>
+                        <input type="range" id="slider-edl-radius" min="0.5" max="4.0" step="0.1" value="1.4">
                     </div>
                     <div class="vs-row">
                         <label for="toggle-vignette">Vignette</label>
@@ -514,11 +575,29 @@
                         </select>
                     </div>
 
+                    <div class="vs-section-label">Coloring</div>
+                    <div class="vs-row">
+                        <label for="color-mode-select">Color Mode</label>
+                        <select id="color-mode-select">
+                            <option value="rgb">RGB (Original)</option>
+                            <option value="cluster">Per-Cluster</option>
+                            <option value="depth">Depth Map</option>
+                        </select>
+                    </div>
+
                     <div class="vs-section-label">Experimental</div>
                     <div class="vs-row">
                         <label for="toggle-particles">Merge Particles</label>
                         <input type="checkbox" id="toggle-particles">
                     </div>
+                </div>
+            </div>
+
+            <div id="annotation-overlay">
+                <div class="annotation-card">
+                    <div class="annotation-step" id="annotation-step"></div>
+                    <div class="annotation-title" id="annotation-title"></div>
+                    <div class="annotation-desc" id="annotation-desc"></div>
                 </div>
             </div>
 
@@ -579,6 +658,6 @@
         };
     </script>
 
-    <script type="module" src="./js/main-hierarchy-vggt.js?v=39"></script>
+    <script type="module" src="./js/main-hierarchy-vggt.js?v=40"></script>
 </body>
 </html>

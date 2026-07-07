@@ -9,9 +9,10 @@ export class SquarenessAnimationEngine {
         this.mergeEvents = [];
         this.activeAnimations = [];
         this.mergeDuration = 2.5;
-        this.leafFadeDuration = 0.5;
+        this.leafConvergeDuration = 3.0;
 
         this.particleEngine = null;
+        this.convergenceEngine = null;
         this.preMatchedCloud = null;
         this.preChildOnlyCloud = null;
         this.preMergedOnlyCloud = null;
@@ -40,10 +41,13 @@ export class SquarenessAnimationEngine {
 
         this.matchedStartBuf = new Float32Array(bufSize * 3);
         this.matchedEndBuf = new Float32Array(bufSize * 3);
+        this.matchedDelayBuf = new Float32Array(bufSize);
         this.coStartBuf = new Float32Array(bufSize * 3);
         this.coEndBuf = new Float32Array(bufSize * 3);
+        this.coDelayBuf = new Float32Array(bufSize);
         this.moStartBuf = new Float32Array(bufSize * 3);
         this.moEndBuf = new Float32Array(bufSize * 3);
+        this.moDelayBuf = new Float32Array(bufSize);
 
         const makeCloud = (opacity) => {
             const geom = new THREE.BufferGeometry();
@@ -153,6 +157,10 @@ export class SquarenessAnimationEngine {
 
         this.mergeEvents = allEvents;
 
+        if (this.convergenceEngine) {
+            this.leafConvergeDuration = this.convergenceEngine.convergeDuration;
+        }
+
         const leaves = allEvents.filter(e => e.isLeaf).length;
         const merges = allEvents.filter(e => !e.isLeaf).length;
         console.log(`Timeline: ${this.mergeEvents.length} events (${leaves} leaves + ${merges} merges)`);
@@ -196,7 +204,12 @@ export class SquarenessAnimationEngine {
             const c = evt.cluster;
 
             if (evt.isLeaf) {
-                if (c.pointCloud) c.pointCloud.visible = true;
+                if (c.pointCloud) {
+                    c.pointCloud.visible = true;
+                    if (this.convergenceEngine) {
+                        this.convergenceEngine.settleClusterInstant(c);
+                    }
+                }
             } else {
                 if (c.pointCloud) c.pointCloud.visible = true;
                 for (const childPath of evt.children) {
@@ -215,7 +228,11 @@ export class SquarenessAnimationEngine {
             if (evt.isLeaf) {
                 if (evt.cluster.pointCloud) {
                     evt.cluster.pointCloud.visible = true;
-                    this.animateFadeIn(evt.cluster);
+                    if (this.convergenceEngine) {
+                        this.playConvergence(evt.cluster);
+                    } else {
+                        this.animateFadeIn(evt.cluster);
+                    }
                 }
             } else {
                 this.playMergeTransition(evt);
@@ -223,7 +240,12 @@ export class SquarenessAnimationEngine {
         } else {
             this.hideTransitionClouds();
             if (evt.isLeaf) {
-                if (evt.cluster.pointCloud) this.animateFadeOut(evt.cluster);
+                if (evt.cluster.pointCloud) {
+                    this.activeAnimations = this.activeAnimations.filter(
+                        a => !(a.type === 'converge' && a.cluster === evt.cluster)
+                    );
+                    this.animateFadeOut(evt.cluster);
+                }
             } else {
                 if (evt.cluster.pointCloud) {
                     evt.cluster.pointCloud.visible = false;
@@ -239,6 +261,46 @@ export class SquarenessAnimationEngine {
                         if (child.fitScale) child.group.scale.setScalar(child.fitScale);
                     }
                 }
+            }
+        }
+    }
+
+    playConvergence(cluster) {
+        const data = this.convergenceEngine.clusterData.get(cluster.path);
+        if (!data) {
+            this.animateFadeIn(cluster);
+            return;
+        }
+
+        this.convergenceEngine.scatterCluster(cluster);
+
+        this.activeAnimations.push({
+            type: 'converge',
+            cluster,
+            convergenceData: data,
+            startTime: performance.now(),
+            duration: this.leafConvergeDuration * 1000,
+            onComplete: () => {
+                this.convergenceEngine.settleClusterInstant(cluster);
+            }
+        });
+    }
+
+    computeDistanceDelays(startBuf, endBuf, delayBuf, count) {
+        const STAGGER_FRAC = 0.35;
+        let maxDist = 0;
+        for (let i = 0; i < count; i++) {
+            const i3 = i * 3;
+            const dx = endBuf[i3] - startBuf[i3];
+            const dy = endBuf[i3 + 1] - startBuf[i3 + 1];
+            const dz = endBuf[i3 + 2] - startBuf[i3 + 2];
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            delayBuf[i] = dist;
+            if (dist > maxDist) maxDist = dist;
+        }
+        if (maxDist > 0) {
+            for (let i = 0; i < count; i++) {
+                delayBuf[i] = (1.0 - delayBuf[i] / maxDist) * STAGGER_FRAC;
             }
         }
     }
@@ -291,6 +353,7 @@ export class SquarenessAnimationEngine {
             mPos[i * 3 + 1] = mStart[i * 3 + 1];
             mPos[i * 3 + 2] = mStart[i * 3 + 2];
         }
+        this.computeDistanceDelays(mStart, mEnd, this.matchedDelayBuf, mLen);
         this.preMatchedCloud.geometry.attributes.position.needsUpdate = true;
         this.preMatchedCloud.geometry.attributes.color.needsUpdate = true;
         this.preMatchedCloud.geometry.setDrawRange(0, mLen);
@@ -319,6 +382,7 @@ export class SquarenessAnimationEngine {
             coPos[i * 3 + 1] = coStart[i * 3 + 1];
             coPos[i * 3 + 2] = coStart[i * 3 + 2];
         }
+        this.computeDistanceDelays(coStart, coEnd, this.coDelayBuf, coLen);
         this.preChildOnlyCloud.geometry.attributes.position.needsUpdate = true;
         this.preChildOnlyCloud.geometry.attributes.color.needsUpdate = true;
         this.preChildOnlyCloud.geometry.setDrawRange(0, coLen);
@@ -353,6 +417,7 @@ export class SquarenessAnimationEngine {
             moPos[i * 3 + 1] = moStart[i * 3 + 1];
             moPos[i * 3 + 2] = moStart[i * 3 + 2];
         }
+        this.computeDistanceDelays(moStart, moEnd, this.moDelayBuf, moLen);
         this.preMergedOnlyCloud.geometry.attributes.position.needsUpdate = true;
         this.preMergedOnlyCloud.geometry.attributes.color.needsUpdate = true;
         this.preMergedOnlyCloud.geometry.setDrawRange(0, moLen);
@@ -422,7 +487,7 @@ export class SquarenessAnimationEngine {
         this.activeAnimations.push({
             type: 'fadeIn', cluster,
             startTime: performance.now(),
-            duration: this.leafFadeDuration * 1000
+            duration: 500
         });
     }
 
@@ -432,7 +497,7 @@ export class SquarenessAnimationEngine {
         this.activeAnimations.push({
             type: 'fadeOut', cluster,
             startTime: performance.now(),
-            duration: this.leafFadeDuration * 1000,
+            duration: 500,
             onComplete: () => {
                 cluster.pointCloud.visible = false;
                 cluster.pointCloud.material.uniforms.uOpacity.value = 1;
@@ -467,6 +532,12 @@ export class SquarenessAnimationEngine {
             const e = this.easeInOutCubic(t);
 
             switch (a.type) {
+                case 'converge': {
+                    const convergeT = t * (1.0 + 0.3);
+                    this.convergenceEngine.updateConvergence(a.convergenceData, convergeT);
+                    break;
+                }
+
                 case 'fadeIn':
                     a.cluster.pointCloud.material.uniforms.uOpacity.value = e;
                     break;
@@ -484,37 +555,49 @@ export class SquarenessAnimationEngine {
                 case 'mergeTransition': {
                     const mArr = this.preMatchedCloud.geometry.attributes.position.array;
                     const ms = this.matchedStartBuf, me = this.matchedEndBuf;
+                    const mDelays = this.matchedDelayBuf;
                     for (let j = 0; j < a.matchedCount; j++) {
+                        const d = mDelays[j];
+                        const pt = Math.max(0, Math.min(1, (t - d) / (1.0 - d)));
+                        const pe = this.easeInOutCubic(pt);
                         const j3 = j * 3;
-                        mArr[j3]     = ms[j3]     + (me[j3]     - ms[j3])     * e;
-                        mArr[j3 + 1] = ms[j3 + 1] + (me[j3 + 1] - ms[j3 + 1]) * e;
-                        mArr[j3 + 2] = ms[j3 + 2] + (me[j3 + 2] - ms[j3 + 2]) * e;
+                        mArr[j3]     = ms[j3]     + (me[j3]     - ms[j3])     * pe;
+                        mArr[j3 + 1] = ms[j3 + 1] + (me[j3 + 1] - ms[j3 + 1]) * pe;
+                        mArr[j3 + 2] = ms[j3 + 2] + (me[j3 + 2] - ms[j3 + 2]) * pe;
                     }
                     this.preMatchedCloud.geometry.attributes.position.needsUpdate = true;
 
                     const coArr = this.preChildOnlyCloud.geometry.attributes.position.array;
                     const cs = this.coStartBuf, ce = this.coEndBuf;
+                    const coDelays = this.coDelayBuf;
                     for (let j = 0; j < a.coCount; j++) {
+                        const d = coDelays[j];
+                        const pt = Math.max(0, Math.min(1, (t - d) / (1.0 - d)));
+                        const pe = this.easeInOutCubic(pt);
                         const j3 = j * 3;
-                        coArr[j3]     = cs[j3]     + (ce[j3]     - cs[j3])     * e;
-                        coArr[j3 + 1] = cs[j3 + 1] + (ce[j3 + 1] - cs[j3 + 1]) * e;
-                        coArr[j3 + 2] = cs[j3 + 2] + (ce[j3 + 2] - cs[j3 + 2]) * e;
+                        coArr[j3]     = cs[j3]     + (ce[j3]     - cs[j3])     * pe;
+                        coArr[j3 + 1] = cs[j3 + 1] + (ce[j3 + 1] - cs[j3 + 1]) * pe;
+                        coArr[j3 + 2] = cs[j3 + 2] + (ce[j3 + 2] - cs[j3 + 2]) * pe;
                     }
                     this.preChildOnlyCloud.geometry.attributes.position.needsUpdate = true;
 
                     const moArr = this.preMergedOnlyCloud.geometry.attributes.position.array;
                     const mos = this.moStartBuf, moe = this.moEndBuf;
+                    const moDelays = this.moDelayBuf;
                     for (let j = 0; j < a.moCount; j++) {
+                        const d = moDelays[j];
+                        const pt = Math.max(0, Math.min(1, (t - d) / (1.0 - d)));
+                        const pe = this.easeInOutCubic(pt);
                         const j3 = j * 3;
-                        moArr[j3]     = mos[j3]     + (moe[j3]     - mos[j3])     * e;
-                        moArr[j3 + 1] = mos[j3 + 1] + (moe[j3 + 1] - mos[j3 + 1]) * e;
-                        moArr[j3 + 2] = mos[j3 + 2] + (moe[j3 + 2] - mos[j3 + 2]) * e;
+                        moArr[j3]     = mos[j3]     + (moe[j3]     - mos[j3])     * pe;
+                        moArr[j3 + 1] = mos[j3 + 1] + (moe[j3 + 1] - mos[j3 + 1]) * pe;
+                        moArr[j3 + 2] = mos[j3 + 2] + (moe[j3 + 2] - mos[j3 + 2]) * pe;
                     }
                     this.preMergedOnlyCloud.geometry.attributes.position.needsUpdate = true;
 
                     this.preMatchedCloud.material.uniforms.uOpacity.value = 1.0;
-                    this.preChildOnlyCloud.material.uniforms.uOpacity.value = 1.0 - t;
-                    this.preMergedOnlyCloud.material.uniforms.uOpacity.value = t;
+                    this.preChildOnlyCloud.material.uniforms.uOpacity.value = 1.0 - e;
+                    this.preMergedOnlyCloud.material.uniforms.uOpacity.value = e;
                     break;
                 }
             }
