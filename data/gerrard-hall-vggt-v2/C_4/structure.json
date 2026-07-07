@@ -1,0 +1,42 @@
+{
+ "root": "merged",
+ "clusters": [
+  {
+   "path": "C_4_1/C_4_1_1/vggt",
+   "type": "vggt",
+   "children": []
+  },
+  {
+   "path": "C_4_1/C_4_1_2/vggt",
+   "type": "vggt",
+   "children": []
+  },
+  {
+   "path": "C_4_1/merged",
+   "type": "merged",
+   "children": [
+    "C_4_1/C_4_1_1/vggt",
+    "C_4_1/C_4_1_2/vggt"
+   ]
+  },
+  {
+   "path": "C_4_2/vggt",
+   "type": "vggt",
+   "children": []
+  },
+  {
+   "path": "C_4_3/vggt",
+   "type": "vggt",
+   "children": []
+  },
+  {
+   "path": "merged",
+   "type": "merged",
+   "children": [
+    "C_4_1/merged",
+    "C_4_2/vggt",
+    "C_4_3/vggt"
+   ]
+  }
+ ]
+}

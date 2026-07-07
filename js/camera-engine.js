@@ -1,84 +1,194 @@
 import * as THREE from 'three';
 
 export class CameraEngine {
-    constructor(camera, controls) {
+    constructor(camera, orbitControls) {
         this.camera = camera;
-        this.controls = controls; // OrbitControls
-        
-        this.mode = 'OVERVIEW'; // 'OVERVIEW' | 'FLYTHROUGH'
-        
-        // Flythrough state
-        this.flyParams = {
-            center: new THREE.Vector3(),
-            radius: 10,
-            duration: 10,
-            startTime: 0,
-            active: false
+        this.orbitControls = orbitControls;
+
+        this.flythrough = null;
+        this.autoOrbit = false;
+        this.autoOrbitSpeed = 0.08;
+
+        this.defaultPosition = null;
+        this.defaultTarget = null;
+        this.userInteracting = false;
+
+        this.cameraPath = null;
+
+        this._onPointerDown = () => { this.userInteracting = true; };
+        this._onPointerUp = () => {
+            setTimeout(() => { this.userInteracting = false; }, 300);
+        };
+        const el = orbitControls.domElement;
+        el.addEventListener('pointerdown', this._onPointerDown);
+        el.addEventListener('pointerup', this._onPointerUp);
+    }
+
+    saveDefault() {
+        this.defaultPosition = this.camera.position.clone();
+        this.defaultTarget = this.orbitControls.target.clone();
+    }
+
+    resetToDefault() {
+        if (!this.defaultPosition) return;
+        this.flythrough = null;
+        this.flyTo(this.defaultPosition, this.defaultTarget, 1.2);
+    }
+
+    setAutoOrbit(enabled) {
+        this.autoOrbit = enabled;
+    }
+
+    flyTo(position, target, duration = 1.5) {
+        this.flythrough = {
+            startPos: this.camera.position.clone(),
+            endPos: position.clone(),
+            startTarget: this.orbitControls.target.clone(),
+            endTarget: target.clone(),
+            startTime: performance.now(),
+            duration: duration * 1000
         };
     }
 
-    startFlythrough(center, radius, duration = 15) {
-        this.mode = 'FLYTHROUGH';
-        
-        // Disable user controls
-        if (this.controls) {
-            this.controls.enabled = false;
-            this.controls.autoRotate = false;
-        }
-
-        this.flyParams.center.copy(center);
-        this.flyParams.radius = radius * 2.0; // slightly wider shot
-        this.flyParams.duration = duration;
-        this.flyParams.startTime = performance.now() / 1000;
-        this.flyParams.active = true;
-        
-        console.log("Starting cinematic flythrough around", center);
+    stopFlythrough() {
+        this.flythrough = null;
     }
 
-    stopFlythrough() {
-        this.mode = 'OVERVIEW';
-        this.flyParams.active = false;
-        
-        // Re-enable user controls
-        if (this.controls) {
-            this.controls.enabled = true;
-            this.controls.autoRotate = true;
-        }
+    startOrbitPath(center, radius, duration) {
+        const r = radius || this.camera.position.distanceTo(this.orbitControls.target);
+        const elevation = this.camera.position.y - this.orbitControls.target.y;
+        const startAngle = Math.atan2(
+            this.camera.position.z - center.z,
+            this.camera.position.x - center.x
+        );
+
+        this.cameraPath = {
+            type: 'orbit',
+            center: center.clone(),
+            radius: r,
+            elevation,
+            startAngle,
+            startTime: performance.now(),
+            duration: (duration || 20) * 1000,
+            loop: true
+        };
+    }
+
+    startCinematicPath(center, radius) {
+        const r = radius || this.camera.position.distanceTo(this.orbitControls.target);
+        const elevation = this.camera.position.y - this.orbitControls.target.y;
+
+        const keyframes = [
+            { angle: 0, elevMult: 1.0, radiusMult: 1.0, time: 0 },
+            { angle: Math.PI * 0.4, elevMult: 0.8, radiusMult: 0.85, time: 0.15 },
+            { angle: Math.PI * 0.8, elevMult: 1.5, radiusMult: 1.1, time: 0.3 },
+            { angle: Math.PI, elevMult: 2.5, radiusMult: 1.3, time: 0.45 },
+            { angle: Math.PI * 1.3, elevMult: 1.8, radiusMult: 1.0, time: 0.6 },
+            { angle: Math.PI * 1.7, elevMult: 0.6, radiusMult: 0.9, time: 0.8 },
+            { angle: Math.PI * 2, elevMult: 1.0, radiusMult: 1.0, time: 1.0 }
+        ];
+
+        const startAngle = Math.atan2(
+            this.camera.position.z - center.z,
+            this.camera.position.x - center.x
+        );
+
+        this.cameraPath = {
+            type: 'cinematic',
+            center: center.clone(),
+            baseRadius: r,
+            baseElevation: elevation,
+            startAngle,
+            keyframes,
+            startTime: performance.now(),
+            duration: 15000,
+            loop: false
+        };
+    }
+
+    stopCameraPath() {
+        this.cameraPath = null;
     }
 
     update(time) {
-        if (this.mode === 'FLYTHROUGH' && this.flyParams.active) {
-            const t = (time - this.flyParams.startTime) / this.flyParams.duration;
-            
-            if (t >= 1) {
-                // Loop or Stop? Let's loop for ambiance, or stop.
-                // Frank said "ends in a nice resting shot".
-                // Let's just keep orbiting smoothly or switch back to autoRotate?
-                // Let's loop the orbit parameter but keep mode FLYTHROUGH until user interrupts?
-                // Actually, let's just let it orbit indefinitely using time as angle.
-            }
-
-            // Orbit logic
-            // Angle based on time
-            const theta = (time * 0.2); // Slow rotation
-            const phi = Math.PI / 6; // 30 degrees elevation
-            
-            const r = this.flyParams.radius;
-            const c = this.flyParams.center;
-            
-            const x = c.x + r * Math.cos(theta);
-            const z = c.z + r * Math.sin(theta);
-            const y = c.y + r * Math.tan(phi);
-            
-            this.camera.position.set(x, y, z);
-            this.camera.lookAt(c);
-        } else {
-            // OVERVIEW mode
-            if (this.controls) {
-                // Ensure autoRotate is definitely off unless enabled elsewhere
-                if (this.controls.autoRotate) this.controls.autoRotate = false;
-                this.controls.update();
-            }
+        if (this.cameraPath) {
+            this._updateCameraPath();
+            return;
         }
+
+        if (this.flythrough) {
+            this._updateFlythrough();
+            return;
+        }
+
+        if (this.autoOrbit && !this.userInteracting) {
+            this.orbitControls.autoRotate = true;
+            this.orbitControls.autoRotateSpeed = this.autoOrbitSpeed;
+        } else {
+            this.orbitControls.autoRotate = false;
+        }
+    }
+
+    _updateCameraPath() {
+        const path = this.cameraPath;
+        const elapsed = performance.now() - path.startTime;
+        let t = elapsed / path.duration;
+
+        if (path.loop) {
+            t = t % 1;
+        } else if (t >= 1) {
+            this.cameraPath = null;
+            return;
+        }
+
+        if (path.type === 'orbit') {
+            const angle = path.startAngle + t * Math.PI * 2;
+            const x = path.center.x + Math.cos(angle) * path.radius;
+            const z = path.center.z + Math.sin(angle) * path.radius;
+            const y = path.center.y + path.elevation;
+
+            this.camera.position.set(x, y, z);
+            this.orbitControls.target.copy(path.center);
+            this.orbitControls.update();
+
+        } else if (path.type === 'cinematic') {
+            const kf = path.keyframes;
+            let i = 0;
+            for (; i < kf.length - 1; i++) {
+                if (t >= kf[i].time && t < kf[i + 1].time) break;
+            }
+            if (i >= kf.length - 1) i = kf.length - 2;
+
+            const segT = (t - kf[i].time) / (kf[i + 1].time - kf[i].time);
+            const smooth = segT * segT * (3 - 2 * segT);
+
+            const angle = path.startAngle + THREE.MathUtils.lerp(kf[i].angle, kf[i + 1].angle, smooth);
+            const elev = path.baseElevation * THREE.MathUtils.lerp(kf[i].elevMult, kf[i + 1].elevMult, smooth);
+            const radius = path.baseRadius * THREE.MathUtils.lerp(kf[i].radiusMult, kf[i + 1].radiusMult, smooth);
+
+            const x = path.center.x + Math.cos(angle) * radius;
+            const z = path.center.z + Math.sin(angle) * radius;
+            const y = path.center.y + elev;
+
+            this.camera.position.set(x, y, z);
+            this.orbitControls.target.copy(path.center);
+            this.orbitControls.update();
+        }
+    }
+
+    _updateFlythrough() {
+        const f = this.flythrough;
+        const t = Math.min((performance.now() - f.startTime) / f.duration, 1);
+        const e = this._easeInOutQuad(t);
+
+        this.camera.position.lerpVectors(f.startPos, f.endPos, e);
+        this.orbitControls.target.lerpVectors(f.startTarget, f.endTarget, e);
+        this.orbitControls.update();
+
+        if (t >= 1) this.flythrough = null;
+    }
+
+    _easeInOutQuad(t) {
+        return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
     }
 }

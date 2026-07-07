@@ -1,0 +1,798 @@
+\documentclass[11pt, letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath, amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usepackage{float}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray}
+}
+
+\title{%
+    \textbf{Gerrard Hall 3D Reconstruction Visualization} \\[0.5em]
+    \large A Comprehensive Technical Report on the Interactive \\
+    Hierarchical Point Cloud Visualization System
+}
+\author{
+    Gerrard Hall Visualization Team \\
+    University of North Carolina at Chapel Hill
+}
+\date{February 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides a comprehensive end-to-end technical explanation of the Gerrard Hall 3D Reconstruction Visualization system. The system renders the hierarchical output of the GTSfM (Georgia Tech Structure from Motion) pipeline as an interactive, animated web visualization using Three.js. We detail the full pipeline from data ingestion through spatial layout computation, animated merge transitions with point-level correspondence, custom GLSL shader rendering, and a multi-pass post-processing stack. We discuss the algorithmic design behind each component, the rationale for key architectural decisions, and the inspiration sources drawn from leading point cloud visualization tools including Potree, SuperSplat, Nerfstudio, and Rerun.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ===========================================================================
+\section{Introduction}
+% ===========================================================================
+
+Gerrard Hall is a historic building on the campus of the University of North Carolina at Chapel Hill. This project visualizes its 3D reconstruction as produced by the GTSfM pipeline~\cite{gtsfm}, which uses a hierarchical approach: individual image clusters are first reconstructed independently using VGGT (Visual Geometry Grounded Transformers), then progressively merged into a single unified reconstruction.
+
+Our visualization system brings this hierarchical process to life. Rather than simply displaying the final point cloud, it animates the entire reconstruction pipeline---showing how individual clusters appear, where they are spatially arranged, and how they merge together step by step until the complete building emerges.
+
+The visualization runs entirely in the browser with no build step, using Three.js~\cite{threejs} for WebGL rendering and ES6 modules for code organization.
+
+% ===========================================================================
+\section{System Architecture}
+% ===========================================================================
+
+\subsection{High-Level Data Flow}
+
+The system follows a linear pipeline architecture:
+
+\begin{enumerate}
+    \item \textbf{Data Ingestion}: \texttt{VGGTDataLoader} parses COLMAP-format~\cite{colmap} output files (\texttt{points3D.txt}, \texttt{images.txt}) and pipeline timestamps.
+    \item \textbf{Normalization}: Point clouds are globally centered, scaled to a target size of 300 units, and rotated using camera-derived scene orientation.
+    \item \textbf{Point Matching}: Nearest-neighbor correspondence is computed between child and parent clusters for smooth merge transitions.
+    \item \textbf{Spatial Layout}: \texttt{SquarenessLayoutEngine} assigns non-overlapping screen-space rectangles to leaf clusters using a squareness-optimized treemap algorithm.
+    \item \textbf{Timeline Construction}: \texttt{SquarenessAnimationEngine} builds an ordered event sequence from the tree structure, incorporating file modification timestamps for temporal ordering.
+    \item \textbf{Rendering}: Three.js renders point clouds with custom GLSL shaders, camera frustums, gradient backgrounds, and a ground grid.
+    \item \textbf{Post-Processing}: A multi-pass pipeline applies bloom, Eye-Dome Lighting, vignette, and color grading effects.
+    \item \textbf{Interaction}: Users control playback, camera modes, render styles, and visual settings through a comprehensive UI.
+\end{enumerate}
+
+\subsection{Module Architecture}
+
+The codebase is organized into ten ES6 modules, each with a single responsibility:
+
+\begin{table}[H]
+\centering
+\caption{Module architecture and responsibilities}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+App Shell & \texttt{main-hierarchy-vggt.js} & Orchestration, UI, animation loop \\
+Data Loader & \texttt{data-loader-vggt.js} & COLMAP parsing, normalization \\
+Layout Engine & \texttt{layout-engine-squareness.js} & Treemap spatial layout \\
+Animation Engine & \texttt{animation-engine-squareness.js} & Timeline, transitions \\
+Camera Engine & \texttt{camera-engine.js} & Orbit, flythrough, camera paths \\
+Frustum Engine & \texttt{frustum-engine.js} & Camera frustum visualization \\
+Interaction Engine & \texttt{interaction-engine.js} & Raycaster hover detection \\
+Point Material & \texttt{point-material.js} & GLSL shaders, blend modes \\
+EDL Pass & \texttt{edl-pass.js} & Eye-Dome Lighting \\
+Particle Engine & \texttt{particle-engine.js} & Ambient merge particles \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ===========================================================================
+\section{Data Ingestion and Normalization}
+% ===========================================================================
+
+\subsection{COLMAP Data Format}
+
+Each cluster in the GTSfM pipeline outputs data in the COLMAP format~\cite{colmap}:
+
+\begin{itemize}
+    \item \texttt{points3D.txt}: Each line contains a 3D point ID, XYZ coordinates, RGB color values (0--255), reprojection error, and a track of image observations.
+    \item \texttt{images.txt}: Camera extrinsics stored as quaternion-translation pairs $(q_w, q_x, q_y, q_z, t_x, t_y, t_z)$ representing the world-to-camera transformation.
+\end{itemize}
+
+\subsection{Hierarchical Structure}
+
+The GTSfM pipeline produces a binary/n-ary tree of clusters:
+\begin{itemize}
+    \item \textbf{Leaf nodes} (type \texttt{vggt}): Individual VGGT reconstructions from small image subsets.
+    \item \textbf{Internal nodes} (type \texttt{merged}): Results of merging two or more child clusters.
+    \item \textbf{Root node}: The final unified reconstruction of the entire building.
+\end{itemize}
+
+The tree structure is hardcoded in \texttt{getStructure()} to match the specific GTSfM output for Gerrard Hall:
+\begin{itemize}
+    \item Root \texttt{merged} $\leftarrow$ \texttt{C\_1/merged}, \texttt{C\_2/vggt}, \texttt{C\_3/merged}
+    \item \texttt{C\_1/merged} $\leftarrow$ \texttt{C\_1/vggt}, \texttt{C\_1/C\_1\_1/vggt}
+    \item \texttt{C\_3/merged} $\leftarrow$ \texttt{C\_3/C\_3\_1/vggt}, \texttt{C\_3/C\_3\_2/vggt}, \texttt{C\_3/vggt}
+\end{itemize}
+
+\subsection{Scene Orientation from Camera Extrinsics}
+\label{sec:scene-orientation}
+
+Raw COLMAP coordinates have an arbitrary orientation. We compute a scene rotation matrix to align the visualization with intuitive axes (Y = up, Z = toward viewer) using the camera extrinsics from the merged cluster's \texttt{images.txt}.
+
+\subsubsection{Camera Position Recovery}
+
+Given a COLMAP quaternion $(q_w, q_x, q_y, q_z)$ and translation $(t_x, t_y, t_z)$, the camera's world position is:
+\begin{equation}
+    \mathbf{C} = -\mathbf{R}^T \mathbf{t}
+\end{equation}
+where $\mathbf{R}$ is the $3 \times 3$ rotation matrix derived from the quaternion (world-to-camera), and $\mathbf{R}^T$ is its transpose (camera-to-world).
+
+The camera's up direction in world coordinates accounts for COLMAP's convention where the Y-axis points downward:
+\begin{equation}
+    \mathbf{u}_{\text{world}} = -\mathbf{R}^T \begin{pmatrix} 0 \\ 1 \\ 0 \end{pmatrix}
+\end{equation}
+
+The camera's look direction:
+\begin{equation}
+    \mathbf{l}_{\text{world}} = \mathbf{R}^T \begin{pmatrix} 0 \\ 0 \\ 1 \end{pmatrix}
+\end{equation}
+
+\subsubsection{Up Vector Estimation}
+
+We compute the scene's up direction as the average of all camera up vectors:
+\begin{equation}
+    \hat{\mathbf{u}} = \text{normalize}\left(\frac{1}{N}\sum_{i=1}^{N} \mathbf{u}_i\right)
+\end{equation}
+
+This approach was chosen over PCA-based plane fitting of camera positions because empirical testing showed 0.9998 agreement between the two methods, and the average camera up is simpler and more robust.
+
+\subsubsection{Scene Basis Construction}
+
+An orthonormal basis $(\mathbf{e}_x, \mathbf{e}_y, \mathbf{e}_z)$ is constructed:
+\begin{align}
+    \mathbf{e}_y &= \hat{\mathbf{u}} \quad \text{(up)} \\
+    \mathbf{e}_z' &= \text{normalize}(\mathbf{f} - (\mathbf{f} \cdot \mathbf{e}_y)\mathbf{e}_y) \quad \text{(front, orthogonalized)} \\
+    \mathbf{e}_x &= \mathbf{e}_y \times \mathbf{e}_z' \quad \text{(right)} \\
+    \mathbf{e}_z &= \mathbf{e}_x \times \mathbf{e}_y \quad \text{(re-orthogonalized front)}
+\end{align}
+where $\mathbf{f}$ is the front direction computed as the vector from the camera centroid to the building centroid.
+
+The scene rotation matrix uses these vectors as rows, transforming any world-space vector $\mathbf{v}$ into scene-space as $(\mathbf{v} \cdot \mathbf{e}_x, \mathbf{v} \cdot \mathbf{e}_y, \mathbf{v} \cdot \mathbf{e}_z)$.
+
+\subsection{Global Normalization}
+
+After computing the scene rotation, all point clouds are:
+\begin{enumerate}
+    \item \textbf{Centered}: Translated so the merged cluster's centroid is at the origin.
+    \item \textbf{Rotated}: The scene rotation matrix $\mathbf{M}$ is applied.
+    \item \textbf{Scaled}: Uniformly scaled so the global bounding sphere radius equals a target size of 300 units:
+    \begin{equation}
+        s = \frac{300}{r_{\text{global}}}
+    \end{equation}
+\end{enumerate}
+
+\subsection{PCA Front Alignment}
+\label{sec:pca}
+
+After normalization, the building may still appear rotated within the XZ plane. We apply Principal Component Analysis on the merged cluster's XZ coordinates to find the building's principal horizontal axis and align it with the X-axis, ensuring the widest facade faces the viewer.
+
+The 2D covariance matrix of the merged cluster's $(x, z)$ coordinates is:
+\begin{equation}
+    \Sigma = \begin{pmatrix} \sigma_{xx} & \sigma_{xz} \\ \sigma_{xz} & \sigma_{zz} \end{pmatrix}
+\end{equation}
+
+The rotation angle to align the principal axis with X is:
+\begin{equation}
+    \theta = -\frac{1}{2}\arctan\left(\frac{2\sigma_{xz}}{\sigma_{xx} - \sigma_{zz}}\right)
+\end{equation}
+
+A rotation matrix about the Y-axis by angle $\theta$ is then applied to all point clouds.
+
+\textbf{Rationale}: A simpler camera-to-building centroid direction could leave the building at an oblique angle. PCA finds the dominant horizontal spread of the building footprint, producing a consistently front-facing view regardless of camera distribution.
+
+% ===========================================================================
+\section{Point Matching Algorithm}
+% ===========================================================================
+
+The core of the merge animation is point-level correspondence between child clusters and the merged parent. This enables smooth per-point interpolation rather than simple cross-fading.
+
+\subsection{Nearest-Neighbor Matching}
+
+For each merged cluster with children:
+\begin{enumerate}
+    \item All child points are transformed into a common coordinate frame using their original centers.
+    \item For each child point, the nearest merged point is found via brute-force Euclidean distance.
+    \item Candidates are sorted by distance, and a threshold is set at $4 \times$ the distance of the 90th percentile match.
+    \item Points are greedily assigned in distance order: each merged point is claimed by at most one child point (one-to-one matching).
+\end{enumerate}
+
+\subsection{Three-Way Partition}
+
+After matching, every point falls into one of three categories:
+
+\begin{table}[H]
+\centering
+\caption{Point partition categories for merge transitions}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Category} & \textbf{Description} & \textbf{Animation} \\
+\midrule
+Matched Pairs & Child point $\leftrightarrow$ merged point & Interpolate position \\
+Child-Only & Child point with no merged match & Fly to nearest merged point, fade out \\
+Merged-Only & Merged point with no child match & Fly from nearest child point, fade in \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The ``Child-Only'' and ``Merged-Only'' categories use many-to-one mapping (multiple unmatched points can fly to/from the same target), ensuring every point has a smooth trajectory.
+
+\subsection{Performance: Pre-Allocated GPU Buffers}
+
+Creating new \texttt{BufferGeometry}, \texttt{Float32Array}, and \texttt{ShaderMaterial} objects on each merge caused frame spikes on integrated GPUs. We instead pre-allocate three reusable \texttt{Points} objects at initialization:
+
+\begin{itemize}
+    \item \texttt{preMatchedCloud}: Renders matched pairs during transition.
+    \item \texttt{preChildOnlyCloud}: Renders child-only points (fade out).
+    \item \texttt{preMergedOnlyCloud}: Renders merged-only points (fade in).
+\end{itemize}
+
+All buffers are sized to the maximum possible point count and use \texttt{THREE.DynamicDrawUsage}. At each merge, we simply update the buffer contents and call \texttt{setDrawRange()} to control how many points are rendered, eliminating GPU allocation overhead entirely.
+
+\textbf{Inspiration}: This pre-allocation pattern is standard in high-performance WebGL applications and is used extensively in Potree~\cite{potree} for managing millions of points with level-of-detail streaming.
+
+% ===========================================================================
+\section{Squareness-Optimized Treemap Layout}
+% ===========================================================================
+
+\subsection{Problem Statement}
+
+Given $n$ leaf clusters with radii $\{r_1, r_2, \ldots, r_n\}$ organized in a tree, assign non-overlapping screen-space rectangles to each leaf such that:
+\begin{enumerate}
+    \item Rectangle areas are proportional to cluster weights ($w_i = r_i^2$).
+    \item Rectangles are as square as possible (minimize aspect ratio distortion).
+    \item The spatial arrangement reflects the hierarchical structure.
+\end{enumerate}
+
+\subsection{Algorithm}
+
+The layout algorithm is a recursive treemap~\cite{treemap} with a novel squareness-optimization step.
+
+\subsubsection{Root Rectangle Computation}
+
+The root rectangle dimensions are computed from the total leaf area:
+\begin{align}
+    A_{\text{total}} &= \sum_{i=1}^{n} (2r_i)^2 \\
+    H &= \sqrt{A_{\text{total}} / (16/9)} \\
+    W &= H \times 16/9
+\end{align}
+
+The 16:9 aspect ratio matches standard screen dimensions.
+
+\subsubsection{Recursive Subdivision}
+
+At each internal node with $k$ children, the algorithm:
+
+\begin{enumerate}
+    \item Computes the weight of each child subtree as the sum of squared leaf radii.
+    \item Generates all $2^{k-1}$ possible partitions of the children into contiguous groups (each gap between consecutive children is either a break or not).
+    \item For each partition, evaluates both row and column orientations.
+    \item For each orientation, computes the worst-case squareness ratio across all resulting tiles:
+    \begin{equation}
+        S = \min_{\text{tiles}} \frac{\min(w_i, h_i)}{\max(w_i, h_i)}
+    \end{equation}
+    where $S = 1$ is a perfect square and $S \to 0$ is an extreme rectangle.
+    \item Selects the partition and orientation that maximizes the worst-case squareness.
+    \item Recurses into each child subtree with its assigned sub-rectangle.
+\end{enumerate}
+
+\subsubsection{Squareness Metric for a Row}
+
+For a row of $m$ equal-area tiles in a rectangle of width $W$ and height $H$ containing $n$ total tiles:
+\begin{equation}
+    \rho = \frac{H \cdot m^2}{W \cdot n}
+\end{equation}
+The squareness is $\min(\rho, 1/\rho)$.
+
+\subsubsection{Padding}
+
+A small padding fraction (0.4\% of the minimum rectangle dimension) is applied between tiles to create visual separation.
+
+\subsection{Merge Region Computation}
+
+For each internal (merged) node, a merge region is computed as the bounding box of all descendant leaf rectangles. The merge target position is the center of this bounding box. This ensures that when clusters merge, the merged point cloud appears in the spatial region that encompasses all of its children.
+
+\subsection{Why Treemap over Alternatives}
+
+We evaluated several layout alternatives:
+
+\begin{table}[H]
+\centering
+\caption{Layout algorithm comparison}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Algorithm} & \textbf{Overlaps?} & \textbf{Hierarchy?} & \textbf{Deterministic?} \\
+\midrule
+Grid & No & No & Yes \\
+Force-Directed & Possible & Implicit & No \\
+Spiral & No & No & Yes \\
+Treemap (ours) & No & Yes & Yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The treemap was chosen because it uniquely satisfies all three requirements: guaranteed non-overlapping placement, natural hierarchical structure representation, and deterministic output.
+
+% ===========================================================================
+\section{Animation System}
+% ===========================================================================
+
+\subsection{Timeline Construction}
+
+The event timeline determines the order in which clusters appear and merge. Events are generated from the tree structure and sorted using pipeline execution timestamps (file modification times from \texttt{timestamps.json}).
+
+\subsubsection{Timestamp-Based Ordering}
+
+When timestamps are available:
+\begin{enumerate}
+    \item Events are sorted by ascending timestamp, with ties broken by type (leaves before merges) and path lexicographic order.
+    \item Timestamps are normalized into a 20-second animation window with configurable minimum (0.5s) and maximum (1.2s) inter-event delays.
+    \item This compression ensures the animation plays at a watchable pace regardless of the real-world pipeline execution time (which could span hours).
+\end{enumerate}
+
+\subsubsection{Structural Ordering (Fallback)}
+
+Without timestamps, events are ordered by tree depth (deepest first), ensuring children always appear before their parents.
+
+\subsection{Leaf Appearance Animation}
+
+When a leaf cluster appears, its point cloud fades in over 0.5 seconds using an opacity uniform in the GLSL shader:
+
+\begin{equation}
+    \alpha(t) = \text{easeInOutCubic}\left(\frac{t}{0.5}\right)
+\end{equation}
+
+\subsection{Merge Transition Animation}
+
+Merge transitions are the centerpiece of the visualization. Over a 2.5-second duration:
+
+\begin{enumerate}
+    \item All child point clouds are hidden (opacity set to 0).
+    \item Three pre-allocated transition clouds become visible:
+    \begin{itemize}
+        \item \textbf{Matched points}: Interpolate from child position to merged position.
+        \item \textbf{Child-only points}: Fly toward their nearest merged point and fade out.
+        \item \textbf{Merged-only points}: Fly from their nearest child point and fade in.
+    \end{itemize}
+    \item An ease-in-out cubic function governs the interpolation parameter $t$:
+    \begin{equation}
+        e(t) = \begin{cases} 4t^3 & \text{if } t < 0.5 \\ 1 - \frac{(-2t + 2)^3}{2} & \text{otherwise} \end{cases}
+    \end{equation}
+    \item At completion, transition clouds are hidden and the merged cluster's actual point cloud becomes visible.
+\end{enumerate}
+
+\subsection{Camera Reframing}
+
+After each event, the camera smoothly animates to frame all currently visible clusters:
+\begin{itemize}
+    \item For intermediate events: the bounding box of visible leaf rectangles determines the target view.
+    \item For the final event: the geometry bounding box of the merged point cloud is used (with 1.45$\times$ margin vs. 1.05$\times$ for intermediate views).
+    \item Camera animation uses ease-in-out quadratic interpolation over 0.6 seconds.
+\end{itemize}
+
+% ===========================================================================
+\section{Rendering Pipeline}
+% ===========================================================================
+
+\subsection{Custom GLSL Point Shaders}
+
+All point clouds are rendered using \texttt{THREE.ShaderMaterial} with a custom vertex shader that implements perspective-correct point sizing:
+
+\begin{equation}
+    \text{gl\_PointSize} = \text{clamp}\left(\frac{s_{\text{point}} \cdot s_{\text{scale}}}{-z_{\text{view}}}, 1.5, s_{\text{max}}\right)
+\end{equation}
+
+where $s_{\text{scale}} = \frac{h_{\text{screen}} \cdot \text{dpr}}{2}$.
+
+\subsection{Three Render Modes}
+
+The system offers three fragment shader modes, selectable at runtime:
+
+\subsubsection{Gaussian Splat}
+\begin{equation}
+    \alpha = e^{-d^2 \cdot 2} \cdot \alpha_{\text{opacity}}
+\end{equation}
+Produces soft, overlapping circles reminiscent of Gaussian splatting techniques~\cite{3dgs}. Uses normal blending. Point size: 18.0.
+
+\subsubsection{Sharp Dense (Default)}
+\begin{equation}
+    \alpha = \text{smoothstep}(0.5, 0.42, d) \cdot \alpha_{\text{opacity}}
+\end{equation}
+Hard-edged anti-aliased circles that produce the densest, most solid appearance. Uses normal blending. Point size: 6.0.
+
+\textbf{Rationale}: After testing all three modes with the full dataset, Sharp Dense was selected as the default because the smaller point size (6.0 vs 18.0/14.0) produces the most solid, building-like appearance, and the sharp edge avoids the ``fuzzy'' look of Gaussian falloff.
+
+\subsubsection{Glowing Particles}
+\begin{align}
+    \text{core} &= \text{smoothstep}(0.18, 0.0, d) \\
+    \text{halo} &= e^{-d^2 \cdot 3} \cdot 0.45 \\
+    \alpha &= \min(\text{core} + \text{halo}, 1.0) \cdot \alpha_{\text{opacity}}
+\end{align}
+Uses premultiplied alpha output ($\text{color} \cdot \alpha$) with additive blending on dark theme, creating a luminous glow effect. Point size: 14.0.
+
+\subsection{Theme-Dependent Blending}
+
+The Glowing Particles mode uses different blending configurations depending on the active theme:
+\begin{itemize}
+    \item \textbf{Dark theme}: \texttt{SrcAlpha + One} blending creates additive glow where overlapping particles become brighter.
+    \item \textbf{Light theme}: \texttt{One + OneMinusSrcAlpha} blending avoids the ``bright on white'' problem.
+\end{itemize}
+
+\subsection{Camera Frustum Visualization}
+
+The \texttt{FrustumEngine} renders wireframe pyramids representing the camera positions and orientations used to capture each cluster:
+\begin{itemize}
+    \item Camera positions are extracted from \texttt{images.txt} using the same quaternion-to-world-position conversion as the scene orientation (Section~\ref{sec:scene-orientation}).
+    \item Each frustum is a wireframe pyramid with length proportional to 15\% of the cluster's point cloud radius.
+    \item Frustum colors are deterministically assigned based on a hash of the cluster path.
+    \item Frustums are synchronized with timeline events: they appear with leaf clusters and transition during merges with smooth opacity fading (400ms fade-in, 600ms fade-out).
+\end{itemize}
+
+\textbf{Inspiration}: Camera frustum visualization is a standard feature in SfM visualization tools. Our implementation draws from Rerun~\cite{rerun}, which displays camera frames alongside reconstructed point clouds for SfM pipeline debugging.
+
+% ===========================================================================
+\section{Post-Processing Pipeline}
+% ===========================================================================
+
+The rendering pipeline uses Three.js \texttt{EffectComposer} to chain multiple post-processing passes:
+
+\begin{enumerate}
+    \item \textbf{RenderPass}: Standard scene render.
+    \item \textbf{UnrealBloomPass}: Bloom/glow effect.
+    \item \textbf{EDLPass}: Eye-Dome Lighting (custom).
+    \item \textbf{VignettePass}: Edge darkening (custom shader).
+    \item \textbf{ColorGradingPass}: Brightness/contrast/saturation (custom shader).
+\end{enumerate}
+
+\subsection{Bloom (UnrealBloomPass)}
+
+Bloom adds a soft glow around bright areas. Parameters are theme-dependent:
+
+\begin{table}[H]
+\centering
+\caption{Bloom parameters by theme}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Parameter} & \textbf{Dark Theme} & \textbf{Light Theme} \\
+\midrule
+Strength & 0.50 & 0.15 \\
+Threshold & 0.60 & 0.90 \\
+Radius & 0.40 & 0.40 \\
+Tone Mapping & ACES Filmic & None \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Inspiration}: SuperSplat~\cite{supersplat} uses bloom as part of its post-processing pipeline for Gaussian splat visualization. The theme-dependent parameterization ensures bloom enhances rather than overwhelms the point cloud on both light and dark backgrounds.
+
+\subsection{Eye-Dome Lighting (EDL)}
+\label{sec:edl}
+
+Eye-Dome Lighting is a screen-space, non-photorealistic shading technique designed specifically for point cloud visualization. It enhances depth perception by darkening pixels at depth discontinuities.
+
+\subsubsection{Algorithm}
+
+\begin{enumerate}
+    \item Render the scene to a depth texture via a separate render target.
+    \item For each pixel, compute the log-depth:
+    \begin{equation}
+        d_{\log} = \log_2\left(\frac{n \cdot f}{f - z_{\text{frag}} \cdot (f - n)}\right)
+    \end{equation}
+    where $n$ and $f$ are the camera near and far planes.
+    \item Sample 8 neighbors (4 cardinal + 4 diagonal at $0.707\times$ radius):
+    \begin{equation}
+        \Delta = \sum_{i=1}^{8} \max\left(0, d_{\log}^{\text{center}} - d_{\log}^{\text{neighbor}_i}\right)
+    \end{equation}
+    \item Apply exponential shading:
+    \begin{equation}
+        \text{shade} = e^{-\Delta \cdot s_{\text{edl}} \cdot 300}
+    \end{equation}
+    \item Multiply the original color by the shade factor.
+\end{enumerate}
+
+\subsubsection{Parameters}
+\begin{itemize}
+    \item \texttt{edlStrength} = 0.7: Controls the darkness of depth edges.
+    \item \texttt{edlRadius} = 1.4: Controls the sampling radius in pixels.
+\end{itemize}
+
+\textbf{Inspiration}: EDL was pioneered by Christian Boucheny~\cite{boucheny2009} and popularized in point cloud visualization by Potree~\cite{potree}, which uses it as a key technique for making large-scale LiDAR point clouds readable without surface reconstruction. Kitware's ParaView~\cite{kitware_edl} also implements EDL for scientific visualization. The Esri ArcGIS Pro blog~\cite{esri_edl} provides excellent before/after comparisons showing how EDL transforms flat-looking point clouds into structured, readable 3D scenes.
+
+\subsection{Vignette}
+
+A subtle darkening of the screen edges draws the viewer's eye to the center of the frame:
+
+\begin{equation}
+    v = \text{smoothstep}(0.45, 0.85, \|\mathbf{uv} - (0.5, 0.5)\|)
+\end{equation}
+\begin{equation}
+    \text{color}_{\text{out}} = \text{color}_{\text{in}} \cdot (1 - v \cdot 0.35)
+\end{equation}
+
+\textbf{Inspiration}: Vignette is a standard cinematic effect used in SuperSplat~\cite{supersplat} and the pmndrs post-processing library~\cite{pmndrs_postprocessing} for Three.js applications.
+
+\subsection{Color Grading}
+
+User-adjustable brightness, contrast, and saturation:
+
+\begin{align}
+    \text{color}' &= \text{color} + B \quad \text{(brightness offset)} \\
+    \text{color}'' &= (\text{color}' - 0.5) \cdot C + 0.5 \quad \text{(contrast)} \\
+    \text{gray} &= 0.299R + 0.587G + 0.114B \quad \text{(luminance)} \\
+    \text{color}_{\text{final}} &= \text{lerp}(\text{gray}, \text{color}'', S) \quad \text{(saturation)}
+\end{align}
+
+Default values: $B = 0$, $C = 1.0$, $S = 1.1$ (slightly boosted saturation).
+
+\textbf{Inspiration}: The pmndrs post-processing demo~\cite{pmndrs_postprocessing} provides an interactive playground for toggling these effects, which directly informed our inclusion of adjustable color grading with UI sliders.
+
+\subsection{Depth of Field (Removed)}
+
+We implemented Depth of Field using Three.js \texttt{BokehPass}, configured to auto-activate only on the final assembled view. However, the massive depth discontinuities inherent in point cloud data caused severe visual artifacts---a ``spasming'' effect where the bokeh blur algorithm oscillated between conflicting depth values at point boundaries. This is a fundamental incompatibility: BokehPass assumes smooth, continuous depth surfaces (as found in mesh-based scenes), which point clouds cannot provide. The feature was removed entirely.
+
+% ===========================================================================
+\section{Environment and Background}
+% ===========================================================================
+
+\subsection{Gradient Backgrounds}
+
+Three switchable gradient background presets are available, implemented as fullscreen quads with a GLSL gradient shader:
+
+\begin{table}[H]
+\centering
+\caption{Gradient background presets}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Preset} & \textbf{Top Color} & \textbf{Bottom Color} \\
+\midrule
+Warm Sunset & \texttt{\#1a0a2e} (deep purple) & \texttt{\#8b3a1f} (burnt orange) \\
+Cool Blue & \texttt{\#0a1628} (dark navy) & \texttt{\#1a3a5c} (steel blue) \\
+Neutral Gray & \texttt{\#2a2a2a} (charcoal) & \texttt{\#4a4a4a} (medium gray) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gradient mesh uses \texttt{depthTest: false} and \texttt{renderOrder: -1000} to ensure it always renders behind the scene content.
+
+\subsection{Ground Grid}
+
+A semi-transparent \texttt{GridHelper} (600 units, 40 divisions) provides spatial reference beneath the point cloud. Opacity is theme-dependent (0.15 light, 0.10 dark) to avoid visual dominance.
+
+% ===========================================================================
+\section{Camera System}
+% ===========================================================================
+
+\subsection{Base Controls}
+
+Standard Three.js \texttt{OrbitControls} with damping factor 0.05 provides orbit, pan, and zoom. A slow auto-orbit (0.08 speed) activates when the user is not interacting.
+
+\subsection{Camera Fly-Through Paths}
+
+Two predefined camera paths are available on the final assembled view:
+
+\subsubsection{Orbit Tour}
+A continuous 360-degree orbit at fixed elevation and radius, completing one revolution in 20 seconds. The orbit center is the \texttt{OrbitControls} target, and the radius is the current camera-to-target distance.
+
+\subsubsection{Cinematic Tour}
+A multi-keyframe spline path with 7 control points varying in angle, elevation, and radius:
+
+\begin{table}[H]
+\centering
+\caption{Cinematic path keyframes}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+\textbf{Time} & \textbf{Angle} & \textbf{Elevation $\times$} & \textbf{Radius $\times$} \\
+\midrule
+0.00 & $0$ & 1.0 & 1.0 \\
+0.15 & $0.4\pi$ & 0.8 & 0.85 \\
+0.30 & $0.8\pi$ & 1.5 & 1.1 \\
+0.45 & $\pi$ & 2.5 & 1.3 \\
+0.60 & $1.3\pi$ & 1.8 & 1.0 \\
+0.80 & $1.7\pi$ & 0.6 & 0.9 \\
+1.00 & $2\pi$ & 1.0 & 1.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Inter-keyframe interpolation uses Hermite smoothstep: $t^2(3 - 2t)$.
+
+\textbf{Inspiration}: Camera path authoring is a key feature of SuperSplat~\cite{supersplat} and Nerfstudio~\cite{nerfstudio}, both of which allow defining keyframe-based camera trajectories for producing polished visualization videos.
+
+% ===========================================================================
+\section{Ambient Merge Particles (Experimental)}
+% ===========================================================================
+
+An optional particle effect adds subtle visual flair during merge transitions:
+
+\begin{itemize}
+    \item \textbf{200 particles} are spawned in a spherical region (60\% of the merge radius) around the merge center.
+    \item Each particle drifts toward the merge center with gentle sinusoidal wobble.
+    \item Particles fade in over 0.3s, hold for 1.0s, and fade out over 0.5s (total life: 1.8s).
+    \item Rendering uses additive blending (\texttt{THREE.AdditiveBlending}) with a soft \texttt{smoothstep} falloff for a glow effect.
+    \item Particle color is theme-dependent: \texttt{\#ccddff} (soft blue-white) on dark theme, \texttt{\#888888} (gray) on light theme.
+\end{itemize}
+
+\textbf{Inspiration}: Atmospheric particle effects are common in creative Three.js projects. The Codrops ``Dreamy GPGPU Particles'' tutorial~\cite{codrops_particles} and various Three.js community experiments with dust/firefly effects informed this implementation.
+
+% ===========================================================================
+\section{User Interface}
+% ===========================================================================
+
+\subsection{Playback Controls}
+\begin{itemize}
+    \item Play/Pause (Space), Previous/Next (Arrow keys), Reset (R)
+    \item Timeline scrubbar with click-to-seek
+    \item Auto-play with configurable inter-event delays
+\end{itemize}
+
+\subsection{Visual Settings Panel}
+
+A collapsible ``Visual Settings'' panel on the right side of the screen provides:
+
+\begin{itemize}
+    \item \textbf{Post-Processing}: Toggles for EDL and Vignette
+    \item \textbf{Color Grading}: Sliders for Brightness ($-0.3$ to $+0.3$), Contrast ($0.5$ to $1.5$), Saturation ($0.5$ to $1.5$)
+    \item \textbf{Environment}: Background preset dropdown, Ground Grid toggle
+    \item \textbf{Camera}: Mode dropdown (Free, Orbit Tour, Cinematic Tour)
+    \item \textbf{Experimental}: Merge Particles toggle
+\end{itemize}
+
+All settings persist via \texttt{localStorage}.
+
+\subsection{Recording}
+
+The \texttt{MediaRecorder} API captures the canvas output at 30fps as VP9 WebM at approximately 5 Mbps, enabling users to export videos directly from the browser.
+
+\subsection{Theme System}
+
+Dark and light themes toggle the scene background, bloom parameters, tone mapping, particle colors, grid opacity, and CSS styling. Theme preference persists in \texttt{localStorage}.
+
+% ===========================================================================
+\section{Technical Dependencies}
+% ===========================================================================
+
+\begin{itemize}
+    \item \textbf{Three.js 0.160.0}: Core 3D rendering, loaded via unpkg CDN with import maps. Provides \texttt{EffectComposer}, \texttt{RenderPass}, \texttt{UnrealBloomPass}, \texttt{ShaderPass}, \texttt{OrbitControls}, and geometry/material primitives.
+    \item \textbf{ES6 Modules}: Native browser module system---no bundler, transpiler, or build step required.
+    \item \textbf{Python HTTP Server}: \texttt{python3 -m http.server 8080} for local development (required for ES6 module CORS compliance).
+\end{itemize}
+
+% ===========================================================================
+\section{Conclusion}
+% ===========================================================================
+
+This visualization system transforms the technical output of the GTSfM pipeline into an engaging, interactive experience that communicates both the process and the result of hierarchical 3D reconstruction. Key technical contributions include:
+
+\begin{enumerate}
+    \item A squareness-optimized treemap layout that naturally represents the hierarchical merge structure.
+    \item Per-point nearest-neighbor matching that enables smooth merge transitions.
+    \item Pre-allocated GPU buffers that eliminate frame spikes during merge animations.
+    \item A multi-pass post-processing pipeline inspired by leading point cloud visualization tools.
+    \item Camera-derived scene orientation using average camera up vectors and PCA-based front alignment.
+\end{enumerate}
+
+The system runs entirely in the browser with no build step, making it immediately accessible for demonstrations and presentations.
+
+% ===========================================================================
+\begin{thebibliography}{99}
+
+\bibitem{gtsfm}
+    Agarwal, S., et al.,
+    ``GTSfM: Georgia Tech Structure from Motion Library,''
+    Georgia Institute of Technology,
+    \url{https://github.com/borglab/gtsfm}.
+
+\bibitem{colmap}
+    Sch\"{o}nberger, J.L. and Frahm, J.-M.,
+    ``Structure-from-Motion Revisited,''
+    \textit{IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, 2016.
+    \url{https://colmap.github.io/}.
+
+\bibitem{threejs}
+    Cabello, R.,
+    ``Three.js: JavaScript 3D Library,''
+    \url{https://threejs.org/}, 2024.
+
+\bibitem{potree}
+    Sch\"{u}tz, M., Krosl, K., and Wimmer, M.,
+    ``Real-Time Continuous Level of Detail Rendering of Point Clouds,''
+    \textit{IEEE VR}, 2019.
+    Potree: \url{https://potree.github.io/}.
+
+\bibitem{supersplat}
+    PlayCanvas,
+    ``SuperSplat: Open Source 3D Gaussian Splat Editor,''
+    \url{https://superspl.at/}, 2024.
+
+\bibitem{nerfstudio}
+    Tancik, M., et al.,
+    ``Nerfstudio: A Modular Framework for Neural Radiance Field Development,''
+    \textit{ACM SIGGRAPH}, 2023.
+    \url{https://nerf.studio/}.
+
+\bibitem{rerun}
+    Rerun Technologies,
+    ``Rerun: Visualize Multimodal Data,''
+    \url{https://rerun.io/}, 2024.
+
+\bibitem{boucheny2009}
+    Boucheny, C.,
+    ``Interactive Scientific Visualization of Large Datasets: Towards a Perceptive-Based Approach,''
+    Ph.D. Thesis, Universit\'{e} Joseph Fourier, 2009.
+
+\bibitem{esri_edl}
+    Esri,
+    ``Eye-Dome Lighting in ArcGIS Pro,''
+    ArcGIS Blog,
+    \url{https://www.esri.com/arcgis-blog/products/arcgis-pro/3d-gis/eye-dome-lighting/}.
+
+\bibitem{kitware_edl}
+    Kitware,
+    ``Eye Dome Lighting: A Non-Photorealistic Shading Technique,''
+    Kitware Blog,
+    \url{https://www.kitware.com/eye-dome-lighting-a-non-photorealistic-shading-technique/}.
+
+\bibitem{pmndrs_postprocessing}
+    pmndrs (Poimandres),
+    ``postprocessing: Post Processing Library for Three.js,''
+    \url{https://pmndrs.github.io/postprocessing/public/demo/}, 2024.
+
+\bibitem{3dgs}
+    Kerbl, B., Kopanas, G., Leimk\"{u}hler, T., and Drettakis, G.,
+    ``3D Gaussian Splatting for Real-Time Radiance Field Rendering,''
+    \textit{ACM Transactions on Graphics (SIGGRAPH)}, 2023.
+
+\bibitem{codrops_particles}
+    Codrops,
+    ``Dreamy GPGPU Particles with Three.js,''
+    \url{https://tympanus.net/codrops/}, 2024.
+
+\bibitem{treemap}
+    Bruls, M., Huizing, K., and van Wijk, J.J.,
+    ``Squarified Treemaps,''
+    \textit{Joint Eurographics and IEEE TCVG Symposium on Visualization}, 2000.
+
+\bibitem{brachmann}
+    Brachmann, E.,
+    ``3D Reconstruction Research and Visual Storytelling,''
+    \url{https://twitter.com/eric_brachmann}, 2024.
+
+\end{thebibliography}
+
+\end{document}

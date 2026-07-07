@@ -3,13 +3,8 @@ import * as THREE from 'three';
 /**
  * Squareness-Based Recursive Rectangle Layout Engine
  * 
- * Uses the squareness algorithm from the Frank/ChatGPT PDF:
- *   S = min(w,h) / max(w,h)  -- 1 for a perfect square, 0 for a thin strip
- * 
- * Key design: Only LEAF nodes get spatial positions. Merged (non-leaf) nodes
- * get a mergeTargetPosition (center of children) and mergeRegion (bounding rect)
- * used solely during merge animations. This prevents the overlap caused by
- * nesting parent and child point clouds in the same space.
+ * Only LEAF nodes get spatial positions. Merged (non-leaf) nodes
+ * get a mergeTargetPosition and mergeRegion used during merge animations.
  */
 export class SquarenessLayoutEngine {
     constructor(clusters) {
@@ -17,19 +12,10 @@ export class SquarenessLayoutEngine {
         this.rootCluster = clusters.get('merged');
         this.bounds = null;
         this.treeNodes = [];
-
-        // Fraction of each tile reserved as padding between siblings
-        this.PADDING_FRAC = 0.06;
+        this.PADDING_FRAC = 0.004;
+        this.leafRadiusMap = new Map();
     }
 
-    // ----------------------------------------------------------------
-    // Core squareness math (unchanged from the PDF algorithm)
-    // ----------------------------------------------------------------
-
-    /**
-     * Enumerate all compositions of n (ordered partitions into positive ints).
-     * For n<=7 there are at most 2^(n-1) = 64 compositions.
-     */
     compositions(n) {
         const result = [];
         const generate = (remaining, current) => {
@@ -44,21 +30,11 @@ export class SquarenessLayoutEngine {
         return result;
     }
 
-    /**
-     * Squareness of one row that has m tiles inside a W x H rectangle
-     * partitioned into n equal-area tiles.
-     *   row height = H * m / n,  tile width = W / m
-     *   rho = (H * m^2) / (W * n),  S = min(rho, 1/rho)
-     */
     squarenessForRow(W, H, n, m) {
         const rho = (H * m * m) / (W * n);
         return rho <= 1 ? rho : 1 / rho;
     }
 
-    /**
-     * Find the best equal-area partition of W x H into n sub-rectangles.
-     * Brute-forces all compositions for both rows-first and cols-first.
-     */
     bestEqualAreaPartition(W, H, n) {
         if (n === 1) {
             return {
@@ -84,7 +60,6 @@ export class SquarenessLayoutEngine {
         return { squareness: bestS, mode: bestMode, groups: bestGroups, layout };
     }
 
-    /** Convert a partition description into concrete { x, y, w, h } tiles. */
     buildTiles(W, H, mode, groups, n) {
         const tiles = [];
         if (mode === 'rows') {
@@ -109,10 +84,6 @@ export class SquarenessLayoutEngine {
         return tiles;
     }
 
-    // ----------------------------------------------------------------
-    // Layout computation
-    // ----------------------------------------------------------------
-
     computeLayout() {
         if (!this.rootCluster) {
             console.error("No root cluster (merged) found!");
@@ -121,7 +92,6 @@ export class SquarenessLayoutEngine {
 
         console.log("\n=== COMPUTING SQUARENESS LAYOUT ===");
 
-        // 1. Build tree from root
         const visited = new Set();
         const buildTree = (cluster, depth = 0) => {
             if (!cluster || visited.has(cluster.path)) return null;
@@ -136,35 +106,32 @@ export class SquarenessLayoutEngine {
         };
         const rootNode = buildTree(this.rootCluster);
 
-        // 2. Count leaves and determine a good root rectangle size.
         const leaves = this.treeNodes.filter(n => n.children.length === 0);
         const leafCount = leaves.length;
-        const maxRadius = Math.max(
-            ...Array.from(this.clusters.values())
-                .filter(c => c.radius > 0).map(c => c.radius), 1
-        );
 
-        // We want each leaf tile large enough so the point cloud (diameter ~2*maxRadius)
-        // fits comfortably with margin.  Total area ~ leafCount * (tileSize)^2.
-        const tileSize = maxRadius * 3;
-        const totalArea = tileSize * tileSize * leafCount * 1.6;
+        this.leafRadiusMap.clear();
+        for (const leaf of leaves) {
+            const r = leaf.cluster.radius > 0 ? leaf.cluster.radius : 1;
+            this.leafRadiusMap.set(leaf.cluster.path, r);
+        }
+
+        let totalArea = 0;
+        for (const leaf of leaves) {
+            const r = this.leafRadiusMap.get(leaf.cluster.path);
+            totalArea += (2.0 * r) * (2.0 * r);
+        }
+        totalArea *= 1.0;
         const aspect = 16 / 9;
         const ROOT_H = Math.sqrt(totalArea / aspect);
         const ROOT_W = ROOT_H * aspect;
 
-        console.log(`Leaves: ${leafCount}, maxRadius: ${maxRadius.toFixed(1)}`);
+        console.log(`Leaves: ${leafCount}, radii: [${leaves.map(l => this.leafRadiusMap.get(l.cluster.path).toFixed(1)).join(', ')}]`);
         console.log(`Root rect: ${ROOT_W.toFixed(0)} x ${ROOT_H.toFixed(0)}`);
 
-        // 3. Recursively assign tiles to LEAVES only.
-        //    Non-leaf nodes do NOT get a tile; they get mergeTargetPosition later.
         const rootRect = { x: -ROOT_W / 2, y: -ROOT_H / 2, w: ROOT_W, h: ROOT_H };
         this.assignLeafTiles(rootNode, rootRect);
-
-        // 4. For each non-leaf (merged) node, compute mergeTargetPosition and mergeRegion
-        //    from the bounding box of its descendant leaves.
         this.computeMergePositions(rootNode);
 
-        // 5. Set Three.js positions and scales on all clusters
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
 
         for (const node of this.treeNodes) {
@@ -172,17 +139,14 @@ export class SquarenessLayoutEngine {
             const isLeaf = node.children.length === 0;
 
             if (isLeaf && c.rect) {
-                // Leaf: place at center of its tile
                 const cx = c.rect.x + c.rect.w / 2;
                 const cy = c.rect.y + c.rect.h / 2;
                 c.hierarchyPosition = new THREE.Vector3(cx, cy, 0);
                 c.group.position.copy(c.hierarchyPosition);
-                c.group.rotation.x = Math.PI;
 
-                // Scale so the point cloud fits within the tile
                 if (c.radius > 0) {
-                    const fitDim = Math.min(c.rect.w, c.rect.h) * 0.44;
-                    c.fitScale = fitDim / c.radius;
+                    const fitDim = Math.min(c.rect.w, c.rect.h) * 0.96;
+                    c.fitScale = fitDim / (2 * c.radius);
                     c.group.scale.setScalar(c.fitScale);
                 }
 
@@ -191,37 +155,32 @@ export class SquarenessLayoutEngine {
                 minY = Math.min(minY, c.rect.y);
                 maxY = Math.max(maxY, c.rect.y + c.rect.h);
 
-                console.log(`  LEAF ${c.path}: tile=(${c.rect.x.toFixed(0)},${c.rect.y.toFixed(0)} ${c.rect.w.toFixed(0)}x${c.rect.h.toFixed(0)}) scale=${c.fitScale.toFixed(3)}`);
-
             } else if (!isLeaf) {
-                // Merged node: use precomputed merge position
                 const pos = c.mergeTargetPosition;
                 const reg = c.mergeRegion;
                 if (pos) {
                     c.hierarchyPosition = pos.clone();
                     c.group.position.copy(c.hierarchyPosition);
-                    c.group.rotation.x = Math.PI;
 
-                    // Scale so the merged point cloud fits the region that held all its children
                     if (c.radius > 0 && reg) {
-                        const fitDim = Math.min(reg.w, reg.h) * 0.44;
-                        c.fitScale = fitDim / c.radius;
+                        const fitDim = Math.min(reg.w, reg.h) * 0.96;
+                        c.fitScale = fitDim / (2 * c.radius);
                         c.group.scale.setScalar(c.fitScale);
                     }
-
-                    console.log(`  MERGE ${c.path}: pos=(${pos.x.toFixed(0)},${pos.y.toFixed(0)}) region=${reg ? (reg.w.toFixed(0)+'x'+reg.h.toFixed(0)) : 'N/A'}`);
                 }
             }
         }
 
-        // 6. Bounds for camera fitting
-        this.bounds = {
-            minX, maxX, minY, maxY,
-            width: maxX - minX + 40,
-            height: maxY - minY + 40
-        };
+        if (minX === Infinity) {
+            this.bounds = { minX: -10, maxX: 10, minY: -10, maxY: 10, width: 60, height: 60 };
+        } else {
+            this.bounds = {
+                minX, maxX, minY, maxY,
+                width: maxX - minX + 2,
+                height: maxY - minY + 2
+            };
+        }
 
-        // Hide orphans
         for (const [path] of this.clusters) {
             if (!visited.has(path)) this.clusters.get(path).group.visible = false;
         }
@@ -230,55 +189,124 @@ export class SquarenessLayoutEngine {
         console.log("=== SQUARENESS LAYOUT COMPLETE ===\n");
     }
 
-    /**
-     * Recursively assign tiles to LEAF nodes only.
-     * Non-leaf nodes just pass their allocated rectangle down to children.
-     */
-    assignLeafTiles(node, rect) {
-        const isLeaf = node.children.length === 0;
+    sumLeafWeights(node) {
+        if (!node) return 0;
+        if (node.children.length === 0) {
+            const r = this.leafRadiusMap.get(node.cluster.path) || 1;
+            return r * r;
+        }
+        let sum = 0;
+        for (const child of node.children) sum += this.sumLeafWeights(child);
+        return sum;
+    }
 
-        if (isLeaf) {
-            // This leaf gets the whole rectangle (with padding already applied by parent)
+    assignLeafTiles(node, rect) {
+        if (!node) return;
+        if (node.children.length === 0) {
             node.cluster.rect = { ...rect };
             return;
         }
 
-        // Non-leaf: subdivide rect among children
-        const n = node.children.length;
-        const partition = this.bestEqualAreaPartition(rect.w, rect.h, n);
+        const children = node.children;
+        const n = children.length;
+        const weights = children.map(c => this.sumLeafWeights(c));
+        const totalWeight = weights.reduce((a, b) => a + b, 0);
         const pad = Math.min(rect.w, rect.h) * this.PADDING_FRAC;
 
-        console.log(`  Partition ${node.cluster.path}: n=${n} mode=${partition.mode} groups=[${partition.groups}] S=${partition.squareness.toFixed(3)}`);
+        // Generate all possible partitions of children into contiguous groups.
+        // For n children, there are 2^(n-1) ways to split (each gap is break or not).
+        const partitions = [];
+        const numSplits = 1 << (n - 1);
+        for (let mask = 0; mask < numSplits; mask++) {
+            const groups = [];
+            let start = 0;
+            for (let bit = 0; bit < n - 1; bit++) {
+                if (mask & (1 << bit)) {
+                    groups.push({ from: start, to: bit + 1 });
+                    start = bit + 1;
+                }
+            }
+            groups.push({ from: start, to: n });
+            partitions.push(groups);
+        }
 
-        for (let i = 0; i < n; i++) {
-            const tile = partition.layout[i];
-            const childRect = {
-                x: rect.x + tile.x + pad / 2,
-                y: rect.y + tile.y + pad / 2,
-                w: tile.w - pad,
-                h: tile.h - pad
-            };
-            this.assignLeafTiles(node.children[i], childRect);
+        // Evaluate each partition in both row and column orientations.
+        let bestScore = -1;
+        let bestPartition = null;
+        let bestOrientation = 'rows';
+
+        for (const groups of partitions) {
+            for (const orientation of ['rows', 'cols']) {
+                const primaryDim = orientation === 'rows' ? rect.h : rect.w;
+                const crossDim = orientation === 'rows' ? rect.w : rect.h;
+                let worst = 1;
+
+                for (const g of groups) {
+                    let groupWeight = 0;
+                    for (let i = g.from; i < g.to; i++) groupWeight += weights[i];
+                    const groupPrimary = primaryDim * (groupWeight / totalWeight);
+
+                    for (let i = g.from; i < g.to; i++) {
+                        const childCross = crossDim * (weights[i] / groupWeight);
+                        const w = (orientation === 'rows' ? childCross : groupPrimary) - pad;
+                        const h = (orientation === 'rows' ? groupPrimary : childCross) - pad;
+                        if (w > 0 && h > 0) {
+                            worst = Math.min(worst, Math.min(w, h) / Math.max(w, h));
+                        } else {
+                            worst = 0;
+                        }
+                    }
+                }
+
+                if (worst > bestScore) {
+                    bestScore = worst;
+                    bestPartition = groups;
+                    bestOrientation = orientation;
+                }
+            }
+        }
+
+        // Apply the best partition.
+        let primaryOff = 0;
+        const primaryTotal = bestOrientation === 'rows' ? rect.h : rect.w;
+        const crossTotal = bestOrientation === 'rows' ? rect.w : rect.h;
+
+        for (const g of bestPartition) {
+            let groupWeight = 0;
+            for (let i = g.from; i < g.to; i++) groupWeight += weights[i];
+            const groupPrimary = primaryTotal * (groupWeight / totalWeight);
+
+            let crossOff = 0;
+            for (let i = g.from; i < g.to; i++) {
+                const childCross = crossTotal * (weights[i] / groupWeight);
+                let childRect;
+                if (bestOrientation === 'rows') {
+                    childRect = {
+                        x: rect.x + crossOff + pad / 2,
+                        y: rect.y + primaryOff + pad / 2,
+                        w: childCross - pad,
+                        h: groupPrimary - pad
+                    };
+                } else {
+                    childRect = {
+                        x: rect.x + primaryOff + pad / 2,
+                        y: rect.y + crossOff + pad / 2,
+                        w: groupPrimary - pad,
+                        h: childCross - pad
+                    };
+                }
+                this.assignLeafTiles(children[i], childRect);
+                crossOff += childCross;
+            }
+            primaryOff += groupPrimary;
         }
     }
 
-    /**
-     * For each non-leaf node, compute:
-     *   mergeTargetPosition  – center of all descendant leaves (where the merged
-     *                          result will appear during the merge animation)
-     *   mergeRegion           – bounding rect of all descendant leaves (used to
-     *                          scale the merged point cloud)
-     */
     computeMergePositions(node) {
-        if (node.children.length === 0) {
-            // Leaf – already has rect
-            return;
-        }
+        if (!node || node.children.length === 0) return;
 
-        // Recurse first so children have their data ready
         for (const child of node.children) this.computeMergePositions(child);
 
-        // Collect bounding rect of all descendant leaf tiles
         const leafRects = [];
         const gatherLeaves = (n) => {
             if (n.children.length === 0 && n.cluster.rect) {

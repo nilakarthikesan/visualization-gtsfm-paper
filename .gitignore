@@ -89,8 +89,12 @@ dist
 .DS_Store
 Thumbs.db
 
-# Large Data Files (Don't commit the massive point clouds)
-data/
-results/
-*.txt
-!points3D_small.txt
+# Recordings (video files are too large for git)
+recordings/*.webm
+recordings/*.mp4
+
+# Colorization backups
+*.txt.bak
+
+# Personal files
+Resume_Official.pdf

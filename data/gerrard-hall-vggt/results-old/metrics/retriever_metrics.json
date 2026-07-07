@@ -1,0 +1,7 @@
+{
+    "retriever_metrics": {
+        "num_input_images": 100.0,
+        "num_retrieved_image_pairs": 762.0,
+        "retriever_duration_sec": 32.4789
+    }
+}
