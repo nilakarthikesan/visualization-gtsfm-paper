@@ -1,0 +1,136 @@
+{
+ "root": "merged",
+ "clusters": [
+  {
+   "path": "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1_1_1/vggt",
+   "type": "vggt",
+   "children": []
+  },
+  {
+   "path": "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1_1/merged",
+   "type": "merged",
+   "children": [
+    "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1_1_1/vggt"
+   ],
+   "metrics": {
+    "merge_child_count": 1.0,
+    "number_cameras_merged": 68.0,
+    "number_tracks_merged": 2006.0
+   }
+  },
+  {
+   "path": "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1_2/vggt",
+   "type": "vggt",
+   "children": []
+  },
+  {
+   "path": "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1/merged",
+   "type": "merged",
+   "children": [
+    "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1_1/merged",
+    "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1_2/vggt"
+   ],
+   "metrics": {
+    "merge_child_count": 2.0,
+    "number_cameras_merged": 75.0,
+    "number_tracks_merged": 5208.0
+   }
+  },
+  {
+   "path": "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/merged",
+   "type": "merged",
+   "children": [
+    "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/C_2_1_1_1_1_1_1_1/merged"
+   ],
+   "metrics": {
+    "merge_child_count": 1.0,
+    "number_cameras_merged": 77.0,
+    "number_tracks_merged": 8087.0
+   }
+  },
+  {
+   "path": "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_2/vggt",
+   "type": "vggt",
+   "children": []
+  },
+  {
+   "path": "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/merged",
+   "type": "merged",
+   "children": [
+    "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_1/merged",
+    "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/C_2_1_1_1_1_1_2/vggt"
+   ],
+   "metrics": {
+    "merge_child_count": 2.0,
+    "number_cameras_merged": 84.0,
+    "number_tracks_merged": 10401.0
+   }
+  },
+  {
+   "path": "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/merged",
+   "type": "merged",
+   "children": [
+    "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/C_2_1_1_1_1_1/merged"
+   ],
+   "metrics": {
+    "merge_child_count": 1.0,
+    "number_cameras_merged": 86.0,
+    "number_tracks_merged": 11734.0
+   }
+  },
+  {
+   "path": "C_2_1/C_2_1_1/C_2_1_1_1/merged",
+   "type": "merged",
+   "children": [
+    "C_2_1/C_2_1_1/C_2_1_1_1/C_2_1_1_1_1/merged"
+   ],
+   "metrics": {
+    "merge_child_count": 1.0,
+    "number_cameras_merged": 86.0,
+    "number_tracks_merged": 12283.0
+   }
+  },
+  {
+   "path": "C_2_1/C_2_1_1/merged",
+   "type": "merged",
+   "children": [
+    "C_2_1/C_2_1_1/C_2_1_1_1/merged"
+   ],
+   "metrics": {
+    "merge_child_count": 1.0,
+    "number_cameras_merged": 86.0,
+    "number_tracks_merged": 16241.0
+   }
+  },
+  {
+   "path": "C_2_1/C_2_1_2/vggt",
+   "type": "vggt",
+   "children": []
+  },
+  {
+   "path": "C_2_1/merged",
+   "type": "merged",
+   "children": [
+    "C_2_1/C_2_1_1/merged",
+    "C_2_1/C_2_1_2/vggt"
+   ],
+   "metrics": {
+    "merge_child_count": 2.0,
+    "number_cameras_merged": 91.0,
+    "number_tracks_merged": 17624.0
+   }
+  },
+  {
+   "path": "merged",
+   "type": "merged",
+   "children": [
+    "C_2_1/merged"
+   ],
+   "metrics": {
+    "merge_child_count": 0.0,
+    "number_cameras_merged": 51.0,
+    "number_tracks_merged": 3344.0
+   }
+  }
+ ]
+}
