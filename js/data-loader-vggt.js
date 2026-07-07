@@ -1,6 +1,103 @@
 import * as THREE from 'three';
 import { createPointMaterial } from './point-material.js?v=38';
 
+export const DATASETS = {
+    original: { label: 'Gerrard Hall (original)', basePath: 'data/gerrard-hall-vggt/results', useManifest: false },
+    BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true },
+    C_1: { label: 'C_1 (deep tree)', basePath: 'data/gerrard-hall-vggt-v2/C_1', useManifest: true },
+    C_2: { label: 'C_2', basePath: 'data/gerrard-hall-vggt-v2/C_2', useManifest: true },
+    C_3: { label: 'C_3', basePath: 'data/gerrard-hall-vggt-v2/C_3', useManifest: true },
+    C_4: { label: 'C_4 (dense)', basePath: 'data/gerrard-hall-vggt-v2/C_4', useManifest: true }
+};
+
+/**
+ * Uniform spatial hash grid for approximate nearest-neighbor lookups.
+ * Points are registered by index; nearest() expands search rings outward
+ * from the query cell until a candidate is found (plus one safety ring).
+ */
+class SpatialGrid {
+    constructor(count) {
+        this.xs = new Float32Array(count);
+        this.ys = new Float32Array(count);
+        this.zs = new Float32Array(count);
+        this.count = 0;
+        this.cells = new Map();
+    }
+
+    add(x, y, z) {
+        const i = this.count++;
+        this.xs[i] = x; this.ys[i] = y; this.zs[i] = z;
+    }
+
+    build() {
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        for (let i = 0; i < this.count; i++) {
+            const x = this.xs[i], y = this.ys[i], z = this.zs[i];
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        }
+        this.minX = minX; this.minY = minY; this.minZ = minZ;
+        const dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
+        const diag = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+        // Aim for ~1 point per cell on average
+        this.cellSize = Math.max(diag / Math.max(Math.cbrt(this.count), 1), 1e-6);
+
+        for (let i = 0; i < this.count; i++) {
+            const key = this._key(this.xs[i], this.ys[i], this.zs[i]);
+            let arr = this.cells.get(key);
+            if (!arr) { arr = []; this.cells.set(key, arr); }
+            arr.push(i);
+        }
+    }
+
+    _key(x, y, z) {
+        const ix = Math.floor((x - this.minX) / this.cellSize);
+        const iy = Math.floor((y - this.minY) / this.cellSize);
+        const iz = Math.floor((z - this.minZ) / this.cellSize);
+        return ix * 73856093 ^ iy * 19349663 ^ iz * 83492791;
+    }
+
+    /** Returns { index, distSq } of (approximate) nearest point. */
+    nearest(x, y, z) {
+        const cx = Math.floor((x - this.minX) / this.cellSize);
+        const cy = Math.floor((y - this.minY) / this.cellSize);
+        const cz = Math.floor((z - this.minZ) / this.cellSize);
+
+        let bestIdx = -1, bestSq = Infinity;
+        const MAX_R = 64;
+        let foundAt = -1;
+
+        for (let r = 0; r <= MAX_R; r++) {
+            // Once found, search one extra ring to catch closer diagonal neighbors
+            if (foundAt >= 0 && r > foundAt + 1) break;
+
+            for (let ix = cx - r; ix <= cx + r; ix++) {
+                for (let iy = cy - r; iy <= cy + r; iy++) {
+                    for (let iz = cz - r; iz <= cz + r; iz++) {
+                        // Only cells on the shell of the current ring
+                        if (Math.max(Math.abs(ix - cx), Math.abs(iy - cy), Math.abs(iz - cz)) !== r) continue;
+                        const key = ix * 73856093 ^ iy * 19349663 ^ iz * 83492791;
+                        const arr = this.cells.get(key);
+                        if (!arr) continue;
+                        for (const i of arr) {
+                            const dx = this.xs[i] - x;
+                            const dy = this.ys[i] - y;
+                            const dz = this.zs[i] - z;
+                            const sq = dx * dx + dy * dy + dz * dz;
+                            if (sq < bestSq) { bestSq = sq; bestIdx = i; }
+                        }
+                    }
+                }
+            }
+            if (bestIdx >= 0 && foundAt < 0) foundAt = r;
+        }
+
+        return { index: bestIdx, distSq: bestSq };
+    }
+}
+
 export class Cluster {
     constructor(path, type, childrenPaths = []) {
         this.path = path;
@@ -35,7 +132,10 @@ export class Cluster {
 }
 
 export class VGGTDataLoader {
-    constructor() {
+    constructor(datasetKey = 'original') {
+        this.dataset = DATASETS[datasetKey] || DATASETS.original;
+        this.datasetKey = DATASETS[datasetKey] ? datasetKey : 'original';
+        this.basePath = this.dataset.basePath;
         this.clusters = new Map();
         this.root = null;
         this.globalCenter = new THREE.Vector3();
@@ -45,14 +145,19 @@ export class VGGTDataLoader {
     }
 
     async load() {
-        const structure = this.getStructure();
-        const flatPaths = this.flattenStructure(structure);
+        let flatPaths;
+        if (this.dataset.useManifest) {
+            flatPaths = await this.loadStructureManifest();
+        } else {
+            flatPaths = this.flattenStructure(this.getStructure());
+        }
 
         let loaded = 0;
         const total = flatPaths.length;
 
         for (const item of flatPaths) {
             const cluster = new Cluster(item.path, item.type, item.children);
+            if (item.metrics) cluster.mergeMetrics = item.metrics;
             this.clusters.set(item.path, cluster);
         }
 
@@ -91,16 +196,31 @@ export class VGGTDataLoader {
         return this.clusters;
     }
 
+    async loadStructureManifest() {
+        const response = await fetch(`${this.basePath}/structure.json`);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch ${this.basePath}/structure.json`);
+        }
+        const manifest = await response.json();
+        return manifest.clusters.map(c => ({
+            path: c.path,
+            type: c.type,
+            children: c.children || [],
+            metrics: c.metrics || null
+        }));
+    }
+
     async loadPointCloud(path, colorIndex) {
         try {
-            const fullPath = `data/gerrard-hall-vggt/results/${path}`;
+            const fullPath = `${this.basePath}/${path}`;
             const response = await fetch(`${fullPath}/points3D.txt`);
             if (!response.ok) throw new Error(`Failed to fetch ${fullPath}`);
             const text = await response.text();
 
             const positions = [];
             const colors = [];
-            
+            let hasRealColor = false;
+
             const lines = text.split('\n');
             for (let line of lines) {
                 if (line.startsWith('#') || line.trim() === '') continue;
@@ -114,9 +234,17 @@ export class VGGTDataLoader {
                 const r = parseInt(parts[4]);
                 const g = parseInt(parts[5]);
                 const b = parseInt(parts[6]);
-                
+                if (r || g || b) hasRealColor = true;
+
                 positions.push(x, y, z);
                 colors.push(r / 255, g / 255, b / 255);
+            }
+
+            // Some exports (e.g. Brussels C_1/C_2/C_3) write 0 0 0 for every
+            // point's RGB. Synthesize a warm height gradient so they render
+            // visibly until real photo colors are baked in (colorize_points.py).
+            if (!hasRealColor && positions.length > 0) {
+                this.applyFallbackColors(positions, colors);
             }
 
             if (positions.length > 0) {
@@ -155,6 +283,34 @@ export class VGGTDataLoader {
         }
     }
     
+    /**
+     * Warm sandstone gradient by height for colorless exports.
+     * Raw VGGT coordinates have up ~= -Y, so smaller Y means higher up.
+     */
+    applyFallbackColors(positions, colors) {
+        let minY = Infinity, maxY = -Infinity;
+        for (let i = 1; i < positions.length; i += 3) {
+            const y = positions[i];
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+        const range = maxY - minY || 1;
+
+        // bottom (ground): muted brick/earth; top (sky-facing): warm sand
+        const lo = [0.38, 0.26, 0.19];
+        const hi = [0.89, 0.78, 0.60];
+
+        const count = positions.length / 3;
+        for (let i = 0; i < count; i++) {
+            const t = 1 - (positions[i * 3 + 1] - minY) / range; // invert: -Y is up
+            // mild deterministic jitter so surfaces don't look flat
+            const j = ((i * 2654435761) % 1000) / 1000 * 0.08 - 0.04;
+            colors[i * 3]     = Math.min(1, Math.max(0, lo[0] + (hi[0] - lo[0]) * t + j));
+            colors[i * 3 + 1] = Math.min(1, Math.max(0, lo[1] + (hi[1] - lo[1]) * t + j));
+            colors[i * 3 + 2] = Math.min(1, Math.max(0, lo[2] + (hi[2] - lo[2]) * t + j));
+        }
+    }
+
     computeGlobalBoundsAndNormalize() {
         let minX = Infinity, maxX = -Infinity;
         let minY = Infinity, maxY = -Infinity;
@@ -279,7 +435,7 @@ export class VGGTDataLoader {
         this.cameraLooks = [];
 
         try {
-            const response = await fetch('data/gerrard-hall-vggt/results/merged/images.txt');
+            const response = await fetch(`${this.basePath}/merged/images.txt`);
             if (!response.ok) throw new Error('Failed to fetch images.txt');
             const text = await response.text();
             const lines = text.split('\n');
@@ -474,17 +630,22 @@ export class VGGTDataLoader {
 
             if (childEntries.length === 0) continue;
 
+            // Spatial grids make nearest-neighbor queries ~O(1) instead of O(N),
+            // which is required for the dense datasets (hundreds of thousands of points).
+            const mergedGrid = new SpatialGrid(mCount);
+            for (let j = 0; j < mCount; j++) mergedGrid.add(mergedX[j], mergedY[j], mergedZ[j]);
+            mergedGrid.build();
+
+            const childGrid = new SpatialGrid(childEntries.length);
+            for (const ce of childEntries) childGrid.add(ce.nx, ce.ny, ce.nz);
+            childGrid.build();
+
             const candidates = [];
-            for (const ce of childEntries) {
-                let bestSq = Infinity;
-                let bestIdx = -1;
-                for (let j = 0; j < mCount; j++) {
-                    const dx = ce.nx - mergedX[j];
-                    const dy = ce.ny - mergedY[j];
-                    const dz = ce.nz - mergedZ[j];
-                    const sq = dx * dx + dy * dy + dz * dz;
-                    if (sq < bestSq) { bestSq = sq; bestIdx = j; }
-                }
+            const nearestMergedByEntry = new Int32Array(childEntries.length);
+            for (let k = 0; k < childEntries.length; k++) {
+                const ce = childEntries[k];
+                const { index: bestIdx, distSq: bestSq } = mergedGrid.nearest(ce.nx, ce.ny, ce.nz);
+                nearestMergedByEntry[k] = bestIdx;
                 candidates.push({
                     childPath: ce.childPath,
                     childIdx: ce.childIdx,
@@ -519,21 +680,15 @@ export class VGGTDataLoader {
 
             // Unmatched child points: fly to nearest merged point (many-to-one allowed)
             const childOnlyPoints = [];
-            for (const ce of childEntries) {
+            for (let k = 0; k < childEntries.length; k++) {
+                const ce = childEntries[k];
                 const key = `${ce.childPath}:${ce.childIdx}`;
                 if (!childMatched.has(key)) {
-                    let bestSq = Infinity, bestIdx = 0;
-                    for (let j = 0; j < mCount; j++) {
-                        const dx = ce.nx - mergedX[j];
-                        const dy = ce.ny - mergedY[j];
-                        const dz = ce.nz - mergedZ[j];
-                        const sq = dx * dx + dy * dy + dz * dz;
-                        if (sq < bestSq) { bestSq = sq; bestIdx = j; }
-                    }
+                    // Reuse the nearest-merged index computed above (same query)
                     childOnlyPoints.push({
                         childPath: ce.childPath,
                         childIdx: ce.childIdx,
-                        flyToMergedIdx: bestIdx
+                        flyToMergedIdx: Math.max(nearestMergedByEntry[k], 0)
                     });
                 }
             }
@@ -542,15 +697,8 @@ export class VGGTDataLoader {
             const mergedOnlyIndices = [];
             for (let i = 0; i < mCount; i++) {
                 if (!mergedClaimed.has(i)) {
-                    const mx = mergedX[i], my = mergedY[i], mz = mergedZ[i];
-                    let bestSq = Infinity, bestCE = null;
-                    for (const ce of childEntries) {
-                        const dx = ce.nx - mx;
-                        const dy = ce.ny - my;
-                        const dz = ce.nz - mz;
-                        const sq = dx * dx + dy * dy + dz * dz;
-                        if (sq < bestSq) { bestSq = sq; bestCE = ce; }
-                    }
+                    const { index: nearIdx } = childGrid.nearest(mergedX[i], mergedY[i], mergedZ[i]);
+                    const bestCE = nearIdx >= 0 ? childEntries[nearIdx] : null;
                     mergedOnlyIndices.push({
                         mergedIdx: i,
                         flyFromChildPath: bestCE ? bestCE.childPath : null,
@@ -598,7 +746,7 @@ export class VGGTDataLoader {
     async loadTimestamps() {
         this.timestamps = {};
         try {
-            const response = await fetch('data/gerrard-hall-vggt/results/timestamps.json');
+            const response = await fetch(`${this.basePath}/timestamps.json`);
             if (!response.ok) throw new Error('timestamps.json not found');
             const data = await response.json();
             for (const [path, info] of Object.entries(data)) {

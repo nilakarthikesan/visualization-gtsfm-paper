@@ -4,13 +4,13 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader } from './data-loader-vggt.js?v=40';
+import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=42';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=40';
 import { InteractionEngine } from './interaction-engine.js?v=5';
 import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=40';
 import { CameraEngine } from './camera-engine.js?v=40';
 import { updatePointScale, applyBlendMode, BLEND_MODES } from './point-material.js?v=40';
-import { FrustumEngine } from './frustum-engine.js?v=29';
+import { FrustumEngine } from './frustum-engine.js?v=30';
 import { EDLPass } from './edl-pass.js?v=40';
 import { ParticleEngine } from './particle-engine.js?v=40';
 import { ConvergenceEngine } from './convergence-engine.js?v=40';
@@ -572,9 +572,32 @@ class VGGTHierarchyApp {
         }
     }
 
+    initDatasetSelect() {
+        const select = document.getElementById('dataset-select');
+        if (!select) return;
+
+        for (const [key, ds] of Object.entries(DATASETS)) {
+            const opt = document.createElement('option');
+            opt.value = key;
+            opt.textContent = ds.label;
+            select.appendChild(opt);
+        }
+        select.value = this.datasetKey;
+        select.addEventListener('change', (e) => {
+            const url = new URL(window.location.href);
+            url.searchParams.set('dataset', e.target.value);
+            window.location.href = url.toString();
+        });
+    }
+
     async start() {
         try {
-            this.dataLoader = new VGGTDataLoader();
+            const params = new URLSearchParams(window.location.search);
+            const requested = params.get('dataset') || 'original';
+            this.datasetKey = DATASETS[requested] ? requested : 'original';
+            this.initDatasetSelect();
+
+            this.dataLoader = new VGGTDataLoader(this.datasetKey);
             this.dataLoader.onProgress = (loaded, total) => {
                 this.ui.loadingText.textContent = `Loading VGGT Clusters... ${loaded}/${total}`;
             };
@@ -661,6 +684,7 @@ class VGGTHierarchyApp {
 
             this.ui.loading.style.display = 'none';
             
+            this.startBackgroundTicker();
             this.animate();
             
         } catch (err) {
@@ -1065,7 +1089,25 @@ class VGGTHierarchyApp {
 
     animate() {
         requestAnimationFrame(() => this.animate());
-        
+        this._lastRafTime = performance.now();
+        this.tick();
+    }
+
+    startBackgroundTicker() {
+        this._lastRafTime = performance.now();
+        setInterval(() => {
+            // If rAF is being throttled (hidden/backgrounded view), keep the
+            // timeline and animations advancing from this interval instead.
+            if (performance.now() - this._lastRafTime > 250) {
+                this.tick();
+            }
+        }, 100);
+    }
+
+    // Advances timeline/animation state. Called from the rAF loop and from a
+    // fallback interval so playback still progresses when the browser
+    // throttles requestAnimationFrame (hidden/backgrounded tab).
+    tick() {
         const time = performance.now() / 1000;
         const dt = 0.016;
 
@@ -1140,6 +1182,13 @@ class VGGTHierarchyApp {
         this.composer.render();
     }
 }
+
+window.addEventListener('error', (e) => {
+    console.error('UNCAUGHT:', e.message, 'at', e.filename + ':' + e.lineno);
+});
+window.addEventListener('unhandledrejection', (e) => {
+    console.error('UNHANDLED PROMISE:', e.reason && e.reason.message ? e.reason.message : e.reason);
+});
 
 const app = new VGGTHierarchyApp();
 window.app = app;

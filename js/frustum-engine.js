@@ -34,7 +34,8 @@ export class FrustumEngine {
 
     async loadClusterCameras(clusterPath) {
         const cameras = [];
-        const filePath = `data/gerrard-hall-vggt/results/${clusterPath}/images.txt`;
+        const basePath = this.dataLoader.basePath || 'data/gerrard-hall-vggt/results';
+        const filePath = `${basePath}/${clusterPath}/images.txt`;
 
         try {
             const response = await fetch(filePath);
