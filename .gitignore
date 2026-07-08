@@ -98,3 +98,7 @@ recordings/*.mp4
 
 # Personal files
 Resume_Official.pdf
+
+# macOS Finder duplicate artifacts (from Trash restore)
+* 2/
+* 2.*
