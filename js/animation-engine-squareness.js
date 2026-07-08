@@ -8,8 +8,8 @@ export class SquarenessAnimationEngine {
         this.worldGroup = worldGroup;
         this.mergeEvents = [];
         this.activeAnimations = [];
-        this.mergeDuration = 2.5;
-        this.leafConvergeDuration = 3.0;
+        this.mergeDuration = 1.5;
+        this.leafConvergeDuration = 1.8;
 
         this.particleEngine = null;
         this.convergenceEngine = null;
@@ -111,9 +111,9 @@ export class SquarenessAnimationEngine {
                 return a.cluster.path.localeCompare(b.cluster.path);
             });
 
-            const TOTAL_ANIMATION_SEC = 20;
-            const MIN_GAP_SEC = 0.5;
-            const MAX_GAP_SEC = 1.2;
+            const TOTAL_ANIMATION_SEC = 14;
+            const MIN_GAP_SEC = 0.35;
+            const MAX_GAP_SEC = 0.8;
             const epochs = allEvents.map(e => e.timestamp);
             const minEpoch = Math.min(...epochs);
             const maxEpoch = Math.max(...epochs);
@@ -137,7 +137,7 @@ export class SquarenessAnimationEngine {
 
             for (let i = 0; i < allEvents.length; i++) {
                 if (i === 0) {
-                    allEvents[i].delay = 0.5;
+                    allEvents[i].delay = 0.35;
                 } else {
                     allEvents[i].delay = Math.min(
                         allEvents[i].animationTime - allEvents[i - 1].animationTime,
@@ -152,7 +152,7 @@ export class SquarenessAnimationEngine {
             merges.sort((a, b) => b.depth - a.depth || a.cluster.path.localeCompare(b.cluster.path));
             allEvents.length = 0;
             allEvents.push(...leaves, ...merges);
-            for (const e of allEvents) e.delay = 1.0;
+            for (const e of allEvents) e.delay = 0.4;
         }
 
         this.mergeEvents = allEvents;

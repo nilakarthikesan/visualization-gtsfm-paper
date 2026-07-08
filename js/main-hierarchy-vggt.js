@@ -7,13 +7,13 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=42';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=40';
 import { InteractionEngine } from './interaction-engine.js?v=5';
-import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=40';
+import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=41';
 import { CameraEngine } from './camera-engine.js?v=40';
 import { updatePointScale, applyBlendMode, BLEND_MODES } from './point-material.js?v=40';
-import { FrustumEngine } from './frustum-engine.js?v=30';
+import { FrustumEngine } from './frustum-engine.js?v=31';
 import { EDLPass } from './edl-pass.js?v=40';
 import { ParticleEngine } from './particle-engine.js?v=40';
-import { ConvergenceEngine } from './convergence-engine.js?v=40';
+import { ConvergenceEngine } from './convergence-engine.js?v=41';
 
 const VignetteShader = {
     uniforms: {
@@ -1123,7 +1123,7 @@ class VGGTHierarchyApp {
             const ref = Math.max(this.lastStepTime, this.lastAnimEndTime || 0);
             const nextIdx = this.currentEventIndex + 1;
             const nextEvent = nextIdx < this.events.length ? this.events[nextIdx] : null;
-            const delay = nextEvent && nextEvent.delay ? nextEvent.delay : 1.0;
+            const delay = nextEvent && nextEvent.delay ? nextEvent.delay : 0.4;
             if (!hasActiveAnims && time - ref > delay) {
                 if (this.currentEventIndex < this.events.length - 1) {
                     this.step(1);

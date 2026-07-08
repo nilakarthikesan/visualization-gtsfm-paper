@@ -127,8 +127,11 @@ export class FrustumEngine {
         const vertices = [];
         const colors = [];
 
+        // Warm brown family: per-cluster variation stays within earthy tones
+        // instead of the full neon spectrum.
         const hue = this.pathToHue(clusterPath);
-        const color = new THREE.Color().setHSL(hue, 0.7, 0.6);
+        const brownHue = 0.05 + hue * 0.06;   // 0.05-0.11: brick to sand
+        const color = new THREE.Color().setHSL(brownHue, 0.45, 0.48 + hue * 0.12);
 
         for (const cam of cameras) {
             const localPos = cam.position.clone();
