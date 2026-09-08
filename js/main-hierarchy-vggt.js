@@ -4,7 +4,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=49';
+import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=50';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=48';
 import { InteractionEngine } from './interaction-engine.js?v=6';
 import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=44';
@@ -738,8 +738,8 @@ class VGGTHierarchyApp {
     async start() {
         try {
             const params = new URLSearchParams(window.location.search);
-            const requested = params.get('dataset') || 'original';
-            this.datasetKey = DATASETS[requested] ? requested : 'original';
+            const requested = params.get('dataset') || 'BRUSSELS';
+            this.datasetKey = DATASETS[requested] ? requested : 'BRUSSELS';
 
             // Point size: dense "fine" clouds want small points, sparse "sampled"
             // clouds want big ones. Use the dataset's pointScale (default 1.0),

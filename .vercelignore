@@ -1,0 +1,11 @@
+.git
+node_modules
+.netlify
+netlify.toml
+terminals
+# C_4 (Dubrovnik) was never reconstructed and is removed from the app.
+data/gerrard-hall-vggt-v2/C_4
+# merged_retriangulated is not referenced by the Brussels manifest.
+data/gerrard-hall-vggt-v2/merged_retriangulated
+# The standalone "original" Gerrard Hall dataset is not part of the Brussels deliverable.
+data/gerrard-hall-vggt

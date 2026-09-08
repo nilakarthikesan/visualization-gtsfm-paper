@@ -9,7 +9,8 @@ import { createPointMaterial } from './point-material.js?v=45';
 // annotations (e.g. the final "Assembled ... — <scene>" label). Distinct from
 // `label`, which is the dataset-picker text.
 export const DATASETS = {
-    original: { label: 'Gerrard Hall (original)', sceneName: 'Gerrard Hall', basePath: 'data/gerrard-hall-vggt/results', useManifest: false },
+    // The standalone "original" Gerrard Hall dataset is not part of the Brussels
+    // deliverable and its data is excluded from the hosted build, so it is not offered.
     BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
     C_1: { label: 'C_1 (deep tree)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_1', useManifest: true, pointScale: 0.4 },
     C_2: { label: 'C_2', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_2', useManifest: true, pointScale: 0.4 },
@@ -140,9 +141,9 @@ export class Cluster {
 }
 
 export class VGGTDataLoader {
-    constructor(datasetKey = 'original') {
-        this.dataset = DATASETS[datasetKey] || DATASETS.original;
-        this.datasetKey = DATASETS[datasetKey] ? datasetKey : 'original';
+    constructor(datasetKey = 'BRUSSELS') {
+        this.dataset = DATASETS[datasetKey] || DATASETS.BRUSSELS;
+        this.datasetKey = DATASETS[datasetKey] ? datasetKey : 'BRUSSELS';
         this.basePath = this.dataset.basePath;
         this.clusters = new Map();
         this.root = null;

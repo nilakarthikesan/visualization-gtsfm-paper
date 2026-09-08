@@ -105,3 +105,4 @@ Resume_Official.pdf
 
 # Local Netlify folder
 .netlify
+.vercel
