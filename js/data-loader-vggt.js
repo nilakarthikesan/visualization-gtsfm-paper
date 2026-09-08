@@ -1,13 +1,21 @@
 import * as THREE from 'three';
-import { createPointMaterial } from './point-material.js?v=38';
+import { createPointMaterial } from './point-material.js?v=45';
 
+// pointScale: per-dataset base size multiplier. The v2 Brussels/C_* clouds are
+// dense fine optimizations, so they read best with small points (~0.4) that
+// preserve detail; Gerrard Hall's sparser sampled cloud keeps the default 1.0.
+// Live-overridable via window.setPointSizeScale() or the ?psize= URL param.
+// sceneName: friendly name of the actual reconstructed scene, used in viewer
+// annotations (e.g. the final "Assembled ... — <scene>" label). Distinct from
+// `label`, which is the dataset-picker text.
 export const DATASETS = {
-    original: { label: 'Gerrard Hall (original)', basePath: 'data/gerrard-hall-vggt/results', useManifest: false },
-    BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true },
-    C_1: { label: 'C_1 (deep tree)', basePath: 'data/gerrard-hall-vggt-v2/C_1', useManifest: true },
-    C_2: { label: 'C_2', basePath: 'data/gerrard-hall-vggt-v2/C_2', useManifest: true },
-    C_3: { label: 'C_3', basePath: 'data/gerrard-hall-vggt-v2/C_3', useManifest: true },
-    C_4: { label: 'C_4 (dense)', basePath: 'data/gerrard-hall-vggt-v2/C_4', useManifest: true }
+    original: { label: 'Gerrard Hall (original)', sceneName: 'Gerrard Hall', basePath: 'data/gerrard-hall-vggt/results', useManifest: false },
+    BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
+    C_1: { label: 'C_1 (deep tree)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_1', useManifest: true, pointScale: 0.4 },
+    C_2: { label: 'C_2', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_2', useManifest: true, pointScale: 0.4 },
+    C_3: { label: 'C_3', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_3', useManifest: true, pointScale: 0.4 }
+    // C_4 (the "community photo collection") was removed: per Kathir, Dubrovnik
+    // was never reconstructed successfully, so it should not be shown.
 };
 
 /**
@@ -197,7 +205,7 @@ export class VGGTDataLoader {
     }
 
     async loadStructureManifest() {
-        const response = await fetch(`${this.basePath}/structure.json`);
+        const response = await fetch(`${this.basePath}/structure.json`, { cache: 'no-cache' });
         if (!response.ok) {
             throw new Error(`Failed to fetch ${this.basePath}/structure.json`);
         }
@@ -213,7 +221,9 @@ export class VGGTDataLoader {
     async loadPointCloud(path, colorIndex) {
         try {
             const fullPath = `${this.basePath}/${path}`;
-            const response = await fetch(`${fullPath}/points3D.txt`);
+            // no-cache forces revalidation so updated exports (e.g. recolorized
+            // points) are never masked by a stale browser-cached copy.
+            const response = await fetch(`${fullPath}/points3D.txt`, { cache: 'no-cache' });
             if (!response.ok) throw new Error(`Failed to fetch ${fullPath}`);
             const text = await response.text();
 
@@ -296,9 +306,13 @@ export class VGGTDataLoader {
         }
         const range = maxY - minY || 1;
 
-        // bottom (ground): muted brick/earth; top (sky-facing): warm sand
-        const lo = [0.38, 0.26, 0.19];
-        const hi = [0.89, 0.78, 0.60];
+        // Colorless exports (Brussels 0 0 0) render as a neutral gray height ramp so
+        // they read on the white "paper" background, matching Kathir's grayscale look.
+        // Wider low->high range than before gives the final model more legible
+        // structure instead of a flat dull-gray blob while we wait on real RGB.
+        // (Real RGB, when present, is used directly and never hits this path.)
+        const lo = [0.24, 0.24, 0.27];
+        const hi = [0.66, 0.66, 0.70];
 
         const count = positions.length / 3;
         for (let i = 0; i < count; i++) {
@@ -370,6 +384,8 @@ export class VGGTDataLoader {
         }
 
         const alignRotation = this.computeFrontAlignment();
+        // Store so the frustum engine can apply the exact same yaw the points got.
+        this.alignRotation = alignRotation;
 
         for (const [path, cluster] of this.clusters) {
             if (cluster.pointCloud && cluster.pointCloud.geometry) {
@@ -435,7 +451,7 @@ export class VGGTDataLoader {
         this.cameraLooks = [];
 
         try {
-            const response = await fetch(`${this.basePath}/merged/images.txt`);
+            const response = await fetch(`${this.basePath}/merged/images.txt`, { cache: 'no-cache' });
             if (!response.ok) throw new Error('Failed to fetch images.txt');
             const text = await response.text();
             const lines = text.split('\n');
@@ -746,7 +762,7 @@ export class VGGTDataLoader {
     async loadTimestamps() {
         this.timestamps = {};
         try {
-            const response = await fetch(`${this.basePath}/timestamps.json`);
+            const response = await fetch(`${this.basePath}/timestamps.json`, { cache: 'no-cache' });
             if (!response.ok) throw new Error('timestamps.json not found');
             const data = await response.json();
             for (const [path, info] of Object.entries(data)) {

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createPointMaterial, applyBlendMode } from './point-material.js?v=38';
+import { createPointMaterial, applyBlendMode } from './point-material.js?v=45';
 
 export class SquarenessAnimationEngine {
     constructor(clusters, layoutEngine, worldGroup) {
@@ -13,6 +13,13 @@ export class SquarenessAnimationEngine {
 
         this.particleEngine = null;
         this.convergenceEngine = null;
+        // Flow-field swirl on merges (prototype ?flow=1). Bows the merge paths
+        // mid-flight along the same field the idle drift uses, then settles.
+        this.flowEnabled = false;
+        this.flowFreq = 0.08;
+        this.flowSpeed = 0.5;
+        this.swirlAmp = 4.0;
+        this._swirlTmp = [0, 0, 0];
         this.preMatchedCloud = null;
         this.preChildOnlyCloud = null;
         this.preMergedOnlyCloud = null;
@@ -524,8 +531,26 @@ export class SquarenessAnimationEngine {
         });
     }
 
+    setFlowEnabled(v) {
+        this.flowEnabled = !!v;
+    }
+
+    // Adds a decaying flow-field bow to a point mid-transition. The envelope
+    // sin(pe*PI) is 0 at both ends so points still leave from and arrive at
+    // their exact positions; it peaks mid-flight for a swirling "mesh-in".
+    _applySwirl(arr, j3, pe, swirlTime) {
+        const env = Math.sin(pe * Math.PI) * this.swirlAmp;
+        if (env <= 0.0001) return;
+        const f = this.flowFreq;
+        const x = arr[j3] * f, y = arr[j3 + 1] * f, z = arr[j3 + 2] * f;
+        arr[j3]     += (Math.sin(y + swirlTime)       + Math.sin(z * 1.3 + swirlTime * 0.7)) * env;
+        arr[j3 + 1] += (Math.sin(z + swirlTime * 1.1) + Math.sin(x * 1.3 + swirlTime * 0.9)) * env;
+        arr[j3 + 2] += (Math.sin(x + swirlTime * 1.3) + Math.sin(y * 1.3 + swirlTime * 0.6)) * env;
+    }
+
     update(dt) {
         const now = performance.now();
+        const swirlTime = this.flowEnabled ? (now / 1000) * this.flowSpeed : 0;
         for (let i = this.activeAnimations.length - 1; i >= 0; i--) {
             const a = this.activeAnimations[i];
             const t = Math.min((now - a.startTime) / a.duration, 1);
@@ -564,6 +589,7 @@ export class SquarenessAnimationEngine {
                         mArr[j3]     = ms[j3]     + (me[j3]     - ms[j3])     * pe;
                         mArr[j3 + 1] = ms[j3 + 1] + (me[j3 + 1] - ms[j3 + 1]) * pe;
                         mArr[j3 + 2] = ms[j3 + 2] + (me[j3 + 2] - ms[j3 + 2]) * pe;
+                        if (this.flowEnabled) this._applySwirl(mArr, j3, pe, swirlTime);
                     }
                     this.preMatchedCloud.geometry.attributes.position.needsUpdate = true;
 
@@ -578,6 +604,7 @@ export class SquarenessAnimationEngine {
                         coArr[j3]     = cs[j3]     + (ce[j3]     - cs[j3])     * pe;
                         coArr[j3 + 1] = cs[j3 + 1] + (ce[j3 + 1] - cs[j3 + 1]) * pe;
                         coArr[j3 + 2] = cs[j3 + 2] + (ce[j3 + 2] - cs[j3 + 2]) * pe;
+                        if (this.flowEnabled) this._applySwirl(coArr, j3, pe, swirlTime);
                     }
                     this.preChildOnlyCloud.geometry.attributes.position.needsUpdate = true;
 
@@ -592,6 +619,7 @@ export class SquarenessAnimationEngine {
                         moArr[j3]     = mos[j3]     + (moe[j3]     - mos[j3])     * pe;
                         moArr[j3 + 1] = mos[j3 + 1] + (moe[j3 + 1] - mos[j3 + 1]) * pe;
                         moArr[j3 + 2] = mos[j3 + 2] + (moe[j3 + 2] - mos[j3 + 2]) * pe;
+                        if (this.flowEnabled) this._applySwirl(moArr, j3, pe, swirlTime);
                     }
                     this.preMergedOnlyCloud.geometry.attributes.position.needsUpdate = true;
 

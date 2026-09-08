@@ -227,7 +227,7 @@
 <body>
 
 <header class="wrap">
-    <div class="venue-badge">ECCV 2026 &middot; Under Review</div>
+    <div class="venue-badge">ECCV 2026</div>
     <h1>Hierarchical Structure-from-Motion Scales Feedforward Reconstruction</h1>
     <div class="authors">Anonymous Authors</div>
     <div class="affil">Author list withheld for double-blind review &middot; Submission #8</div>
@@ -257,10 +257,9 @@
         <div class="demo-tabs">
             <button class="demo-tab active" data-dataset="BRUSSELS">Grand-Place Brussels &middot; 234 images</button>
             <button class="demo-tab" data-dataset="original">Gerrard Hall</button>
-            <button class="demo-tab" data-dataset="C_4">Dense community collection</button>
         </div>
         <div class="demo-frame-wrap">
-            <iframe id="demo-frame" src="hierarchy-vggt.html?dataset=BRUSSELS&embed=1&v=3" title="Interactive hierarchical reconstruction demo" loading="lazy"></iframe>
+            <iframe id="demo-frame" src="hierarchy-vggt.html?dataset=BRUSSELS&embed=1&v=4" title="Interactive hierarchical reconstruction demo" loading="lazy"></iframe>
         </div>
         <div class="demo-hint">
             <span>Drag to orbit &middot; scroll to zoom &middot; right-drag to pan &middot; click the timeline to jump between merge events</span>
@@ -387,7 +386,7 @@
         <pre class="bibtex">@inproceedings{anonymous2026hierarchical,
   title     = {Hierarchical Structure-from-Motion Scales Feedforward Reconstruction},
   author    = {Anonymous},
-  booktitle = {European Conference on Computer Vision (ECCV), under review},
+  booktitle = {European Conference on Computer Vision (ECCV)},
   year      = {2026},
   note      = {Citation will be updated upon publication}
 }</pre>
@@ -407,7 +406,7 @@
         tab.addEventListener('click', () => {
             document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            frame.src = `hierarchy-vggt.html?dataset=${tab.dataset.dataset}&embed=1&v=3`;
+            frame.src = `hierarchy-vggt.html?dataset=${tab.dataset.dataset}&embed=1&v=4`;
         });
     });
 </script>

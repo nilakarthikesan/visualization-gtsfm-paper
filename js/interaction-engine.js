@@ -29,16 +29,23 @@ export class InteractionEngine {
         }
         const intersects = this.raycaster.intersectObjects(pointClouds);
 
+        // Restore the previously hovered cluster to its real base size (the
+        // active blend mode's size), not a hardcoded value that would inflate
+        // points permanently after a hover.
         if (this.hoveredCluster) {
-            this.hoveredCluster.pointCloud.material.uniforms.uPointSize.value = 12.0;
+            const u = this.hoveredCluster.pointCloud.material.uniforms.uPointSize;
+            if (this._savedSize !== undefined) u.value = this._savedSize;
             this.hoveredCluster = null;
+            this._savedSize = undefined;
         }
 
         if (intersects.length > 0) {
             const cluster = intersects[0].object.userData.cluster;
             if (cluster) {
                 this.hoveredCluster = cluster;
-                cluster.pointCloud.material.uniforms.uPointSize.value = 14.0;
+                const u = cluster.pointCloud.material.uniforms.uPointSize;
+                this._savedSize = u.value;
+                u.value = this._savedSize * 1.6; // relative emphasis on hover
             }
         }
     }
