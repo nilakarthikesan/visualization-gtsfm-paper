@@ -201,6 +201,7 @@ export class FrustumEngine {
         group.userData.cameraCount = cameras.length;
 
         const cluster = this.clusters.get(clusterPath);
+        if (cluster) cluster.layoutCameras = cameras;
         const clusterRadius = cluster ? cluster.radius : 1;
         // Attach even when size is zero, so increasing it later reveals the lines.
         (cluster?.group || this.worldGroup).add(group);

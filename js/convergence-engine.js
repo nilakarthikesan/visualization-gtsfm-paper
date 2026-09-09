@@ -21,8 +21,8 @@ export class ConvergenceEngine {
         }
 
         const scatteredPositions = new Float32Array(count * 3);
-        // Reveal from a compact copy about the footprint center. Both endpoints
-        // are inside the fitted box, so every interpolated point stays in its tile.
+        // Reveal from a compact copy about the footprint center. Retained inliers
+        // stay in their tile; the outer tails are contained by fragment clipping.
         // The fallback is for older viewers that do not use the rectangle layout.
         const box = cluster.revealBox;
         const center = box ? {

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
-// Geometry fits include every point, but a large point sprite can still extend
-// beyond its center's tile. Clip fragments as well, including line/particle effects.
+// Contain the tails outside the 95% fit, as well as point-sprite edges and
+// line/particle effects. Source geometry is preserved for manual 3D inspection.
 export function bindRegionClip(object, getRegion) {
     const material = object.material;
     const uniforms = {

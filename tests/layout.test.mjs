@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { SquarenessLayoutEngine } from '../js/layout-engine-squareness.js';
 import { planFloorplan } from '../js/recursive-floorplan.js';
 import { ConvergenceEngine } from '../js/convergence-engine.js';
+import { centralIndices } from '../js/robust-footprint.js';
 
 globalThis.window = { innerHeight: 900, devicePixelRatio: 1, location: { search: '' } };
 const { Cluster, VGGTDataLoader } = await import('../js/data-loader-vggt.js');
@@ -15,9 +16,12 @@ const { VGGTHierarchyApp } = await import('../js/main-hierarchy-vggt.js');
 const { bindRegionClip } = await import('../js/region-clipping.js');
 
 const epsilon = 1e-3;
+function isInside(r, x, y) {
+    return x >= r.x - epsilon && x <= r.x + r.w + epsilon &&
+        y >= r.y - epsilon && y <= r.y + r.h + epsilon;
+}
 function inside(r, x, y) {
-    assert.ok(x >= r.x - epsilon && x <= r.x + r.w + epsilon &&
-        y >= r.y - epsilon && y <= r.y + r.h + epsilon, `(${x},${y}) escapes ${JSON.stringify(r)}`);
+    assert.ok(isInside(r,x,y), `(${x},${y}) escapes ${JSON.stringify(r)}`);
 }
 function contains(outer, inner) {
     inside(outer, inner.x, inner.y); inside(outer, inner.x + inner.w, inner.y + inner.h);
@@ -27,10 +31,13 @@ function disjoint(a, b) {
         Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y) < epsilon, 'unrelated regions overlap');
 }
 function checkPoints(c, region = c.rect, position = c.pointCloud.geometry.attributes.position) {
+    let retained = 0;
     for (let i = 0; i < position.count; ++i) {
-        inside(region, c.hierarchyPosition.x + position.getX(i) * c.fitScale,
-            c.hierarchyPosition.y + position.getY(i) * c.fitScale);
+        if (isInside(region, c.hierarchyPosition.x + position.getX(i) * c.fitScale,
+            c.hierarchyPosition.y + position.getY(i) * c.fitScale)) retained++;
     }
+    assert.ok(retained >= Math.ceil(position.count * 0.95),
+        `${c.path}: only ${retained}/${position.count} inside the cell`);
 }
 function synthetic(path, positions) {
     const c = new Cluster(path, 'vggt');
@@ -40,6 +47,41 @@ function synthetic(path, positions) {
     c.setPointCloud(g, createPointMaterial());
     return c;
 }
+
+test('95% means joint XY coverage, including tiny and degenerate populations', () => {
+    const points = Array.from({length:100}, (_, i) => [i % 10, Math.floor(i / 10)]);
+    const selected = centralIndices(points.length, i=>points[i][0], i=>points[i][1]);
+    assert.equal(new Set(selected).size,95);
+    const loX=Math.min(...selected.map(i=>points[i][0])), hiX=Math.max(...selected.map(i=>points[i][0]));
+    const loY=Math.min(...selected.map(i=>points[i][1])), hiY=Math.max(...selected.map(i=>points[i][1]));
+    assert.ok(points.filter(([x,y])=>x>=loX&&x<=hiX&&y>=loY&&y<=hiY).length>=95);
+    assert.deepEqual(centralIndices(0,()=>0,()=>0),[]);
+    assert.equal(centralIndices(3,()=>0,()=>0).length,3);
+    assert.equal(centralIndices(100,()=>1,()=>1).length,95);
+});
+
+test('point and camera outliers are trimmed separately, retaining whole camera wireframes', () => {
+    const points=[];
+    for(let i=0;i<2000;i++) points.push(...(i<1900 ? [i%19/10, Math.floor(i/19)/50, 0] : [10000,10000,0]));
+    const root=synthetic('merged',points);
+    const clusters=new Map([['merged',root]]);
+    const frustums=new FrustumEngine(new THREE.Group()); frustums.clusters=clusters;
+    const cameras=Array.from({length:20},(_,i)=>({position:new THREE.Vector3(i<19?i/10:20000,0,1),
+        look:new THREE.Vector3(0,0,1), up:new THREE.Vector3(0,1,0),right:new THREE.Vector3(1,0,0)}));
+    frustums.buildFrustumGroup(cameras,'merged');
+    const layout=new SquarenessLayoutEngine(clusters); layout.computeLayout();
+    checkPoints(root); checkPoints(root,root.rect,root.frustumGeometry.attributes.position);
+    const box=root.layoutExtent.box;
+    assert.ok(box.max.x<1000 && box.max.y<1000,'extreme outliers still control the footprint');
+    let completeCameras=0;
+    const pos=root.frustumGeometry.attributes.position;
+    for(let i=0;i<20;i++) {
+        if(Array.from({length:16},(_,j)=>i*16+j).every(j=>
+            box.containsPoint(new THREE.Vector3().fromBufferAttribute(pos,j)))) completeCameras++;
+    }
+    assert.equal(completeCameras,19);
+    assert.equal(points.length,root.pointCloud.geometry.attributes.position.count*3,'source data were deleted');
+});
 
 test('full geometry, extreme outliers, and frustums fit; root frame ignores leaf gauges', () => {
     const root = synthetic('merged', [-5,-2,-2,5,2,2]);
@@ -72,7 +114,7 @@ test('look-ahead packing avoids leaf-count slivers in a 16-leaf caterpillar', ()
     }
 });
 
-test('Brussels: every timeline frontier, full geometry, reveals, and merge trajectories are contained', async t => {
+test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge trajectories', async t => {
     const oldFetch = globalThis.fetch;
     const oldLog = console.log;
     console.log = () => {};
@@ -120,10 +162,19 @@ test('Brussels: every timeline frontier, full geometry, reveals, and merge traje
                 for(const time of [0,.25,.5,.75,1]) {
                     animation.startTime = performance.now() - time * animation.duration;
                     engine.update(0);
-                    for(const [cloud,count] of [[engine.preMatchedCloud,animation.matchedCount],
-                        [engine.preChildOnlyCloud,animation.coCount],[engine.preMergedOnlyCloud,animation.moCount]]) {
+                    for(const [cloud,count,start,end] of [[engine.preMatchedCloud,animation.matchedCount,engine.matchedStartBuf,engine.matchedEndBuf],
+                        [engine.preChildOnlyCloud,animation.coCount,engine.coStartBuf,engine.coEndBuf],
+                        [engine.preMergedOnlyCloud,animation.moCount,engine.moStartBuf,engine.moEndBuf]]) {
                         const pos=cloud.geometry.attributes.position;
-                        for(let j=0;j<count;j++) inside(event.cluster.rect,pos.getX(j),pos.getY(j));
+                        for(let j=0;j<count;j++) {
+                            // Inlier paths stay inside geometrically; outlier paths
+                            // are contained by the same tested fragment clip as clouds.
+                            if(isInside(event.cluster.rect,start[j*3],start[j*3+1]) &&
+                               isInside(event.cluster.rect,end[j*3],end[j*3+1])) {
+                                inside(event.cluster.rect,pos.getX(j),pos.getY(j));
+                            }
+                        }
+                        assert.equal(engine.transitionRegion,event.cluster.rect);
                     }
                 }
             }
@@ -147,7 +198,7 @@ test('Brussels: every timeline frontier, full geometry, reveals, and merge traje
             }
             if (size===0) assert.ok([...clusters.values()].every(c=>!c.frustumGeometry));
         }
-        t.diagnostic('Verified 93 events, 40 reveals, 53 merges, all loaded points and camera wireframes.');
+        t.diagnostic('Verified 93 events, 40 reveals, 53 merges, and at least 95% point and camera-wireframe coverage.');
     } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
 });
 

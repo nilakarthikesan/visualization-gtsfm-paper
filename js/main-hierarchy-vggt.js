@@ -5,14 +5,14 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=53';
-import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=51';
-import { LayoutGuides } from './layout-guides.js?v=1';
+import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=52';
+import { LayoutGuides } from './layout-guides.js?v=2';
 import { bindRegionClip } from './region-clipping.js?v=1';
 import { InteractionEngine } from './interaction-engine.js?v=6';
 import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=48';
 import { CameraEngine } from './camera-engine.js?v=40';
 import { updatePointScale, applyBlendMode, BLEND_MODES, updateFlowTime, setFlowParams, setPointSizeScale } from './point-material.js?v=47';
-import { FrustumEngine } from './frustum-engine.js?v=39';
+import { FrustumEngine } from './frustum-engine.js?v=40';
 import { EDLPass } from './edl-pass.js?v=41';
 import { ParticleEngine } from './particle-engine.js?v=41';
 import { ConvergenceEngine } from './convergence-engine.js?v=44';
@@ -116,6 +116,7 @@ export class VGGTHierarchyApp {
         this.fixedFrame = localStorage.getItem('gh-fixed-frame') !== 'false';
         this.showLayoutGuides = new URLSearchParams(window.location.search).get('regions') === '1'
             || localStorage.getItem('gh-layout-guides') === 'true';
+        this.showNodeLabels = localStorage.getItem('gh-node-labels') === 'true';
         try {
             const p = new URLSearchParams(window.location.search);
             const c = p.get('camera');
@@ -546,6 +547,13 @@ export class VGGTHierarchyApp {
         regionsToggle.addEventListener('change', e => {
             this.showLayoutGuides = e.target.checked;
             localStorage.setItem('gh-layout-guides', this.showLayoutGuides);
+        });
+        const labelsToggle = document.getElementById('toggle-node-labels');
+        labelsToggle.checked = this.showNodeLabels;
+        labelsToggle.addEventListener('change', e => {
+            this.showNodeLabels = e.target.checked;
+            localStorage.setItem('gh-node-labels', this.showNodeLabels);
+            this.updateUI();
         });
 
         // Cluster Gap: space between neighboring tiles (treemap PADDING_FRAC). Higher
@@ -1338,7 +1346,8 @@ export class VGGTHierarchyApp {
         
         const event = this.events[this.currentEventIndex];
         const eventType = event.isLeaf ? 'Cluster' : 'Merge';
-        let label = `Event ${this.currentEventIndex + 1}/${count}: ${eventType} — ${event.path}`;
+        let label = `Event ${this.currentEventIndex + 1}/${count}: ${eventType}`;
+        if (this.showNodeLabels) label += ` — ${event.path}`;
         if (event.timestamp) {
             const d = new Date(event.timestamp * 1000);
             label += ` (${d.toLocaleTimeString()})`;
@@ -1494,7 +1503,7 @@ export class VGGTHierarchyApp {
         if (this.cameraEngine) this.cameraEngine.update(time);
         
         this.orbitControls.update();
-        this.layoutGuides?.update(this.camera, this.events, this.currentEventIndex, this.showLayoutGuides);
+        this.layoutGuides?.update(this.camera, this.events, this.currentEventIndex, this.showLayoutGuides, this.showNodeLabels);
         this.composer.render();
     }
 }

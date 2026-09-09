@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { planFloorplan } from './recursive-floorplan.js?v=1';
+import { centralIndices } from './robust-footprint.js?v=1';
 
 /** Final composition first; every node owns a rectangle throughout the build. */
 export class SquarenessLayoutEngine {
@@ -13,15 +14,44 @@ export class SquarenessLayoutEngine {
         this.bounds = null;
     }
 
-    // Include ALL displayed points and camera wireframes, not percentile samples.
-    // Geometry is local to cluster.group; frustums share that same local frame.
+    // Fit the central 95% of points and 95% of cameras independently, then union
+    // their bounds. Retained cameras include their entire wireframe, not just an
+    // apex. All data remain available; region clipping contains the outer tails.
     measureCluster(cluster) {
         const box = new THREE.Box3();
+        const fullBox = new THREE.Box3();
+        const point = new THREE.Vector3();
         for (const geometry of [cluster.pointCloud?.geometry, cluster.frustumGeometry]) {
             if (!geometry) continue;
             geometry.computeBoundingBox();
-            box.union(geometry.boundingBox);
+            fullBox.union(geometry.boundingBox);
         }
+        const positions = cluster.pointCloud?.geometry.attributes.position;
+        if (positions) {
+            for (const i of centralIndices(positions.count, i => positions.getX(i), i => positions.getY(i))) {
+                box.expandByPoint(point.fromBufferAttribute(positions, i));
+            }
+        }
+        const frustum = cluster.frustumGeometry?.attributes.position;
+        const cameras = cluster.layoutCameras;
+        if (frustum && cameras?.length) {
+            const retained = centralIndices(cameras.length, i => cameras[i].position.x, i => cameras[i].position.y);
+            // FrustumEngine emits eight line segments (16 vertices) per camera.
+            const verticesPerCamera = frustum.count / cameras.length;
+            for (const i of retained) {
+                for (let j = i * verticesPerCamera; j < (i + 1) * verticesPerCamera; j++) {
+                    box.expandByPoint(point.fromBufferAttribute(frustum, j));
+                }
+            }
+        } else if (frustum) {
+            // Compatibility for callers providing wireframes without camera metadata.
+            for (const i of centralIndices(frustum.count, i => frustum.getX(i), i => frustum.getY(i))) {
+                box.expandByPoint(point.fromBufferAttribute(frustum, i));
+            }
+        }
+        // Orthographic depth does not influence XY fitting. Keep the entire Z
+        // range so the near/far planes do not accidentally clip retained points.
+        if (!fullBox.isEmpty()) { box.min.z = fullBox.min.z; box.max.z = fullBox.max.z; }
         if (box.isEmpty()) {
             const r = cluster.radius || 1;
             box.set(new THREE.Vector3(-r, -r, -r), new THREE.Vector3(r, r, r));
