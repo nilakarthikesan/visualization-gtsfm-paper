@@ -6,8 +6,22 @@ export class FrustumEngine {
         this.frustumGroups = new Map();
         this.frustumAspect = 4 / 3;
         this.frustumFovY = 50;
-        this.frustumRelativeSize = 0.15;
+        // Small coral wireframe pyramids matching Kathir's site style. Sized as a
+        // fraction of each cluster's own radius so they stay proportional to the
+        // reconstruction they belong to; kept deliberately small so the final
+        // assembled Brussels view is not swamped by big frustums (Akshay/Kathir
+        // feedback). Live-adjustable via setFrustumSize()/the UI slider/?frustum=.
+        this.frustumRelativeSize = 0.02;
+        try {
+            const p = new URLSearchParams(window.location.search);
+            const f = parseFloat(p.get('frustum'));
+            if (isFinite(f) && f >= 0) this.frustumRelativeSize = f;
+        } catch (e) { /* non-browser */ }
         this.activeFades = [];
+        // Per-cluster transformed cameras cached so frustum geometry can be
+        // rebuilt in place when the size parameter changes (Akshay: make it a
+        // parameter).
+        this.camerasByPath = new Map();
     }
 
     async loadForClusters(clusters, dataLoader) {
@@ -23,7 +37,9 @@ export class FrustumEngine {
             const cameras = await this.loadClusterCameras(path);
             if (cameras.length === 0) continue;
 
-            const transformed = this.transformCameras(cameras);
+            const cluster = clusters.get(path);
+            const transformed = this.transformCameras(cameras, cluster ? cluster.originalCenter : null);
+            this.camerasByPath.set(path, transformed);
             const group = this.buildFrustumGroup(transformed, path);
             group.visible = false;
             this.frustumGroups.set(path, group);
@@ -38,7 +54,7 @@ export class FrustumEngine {
         const filePath = `${basePath}/${clusterPath}/images.txt`;
 
         try {
-            const response = await fetch(filePath);
+            const response = await fetch(filePath, { cache: 'no-cache' });
             if (!response.ok) return cameras;
             const text = await response.text();
             const lines = text.split('\n');
@@ -94,32 +110,46 @@ export class FrustumEngine {
         return cameras;
     }
 
-    transformCameras(cameras) {
+    transformCameras(cameras, originalCenter) {
         const dl = this.dataLoader;
         const center = dl.globalCenter;
         const rot = dl.sceneRotation;
         const scale = dl.scaleFactor;
+        const align = dl.alignRotation;
 
+        // Mirror the exact point pipeline (data-loader computeGlobalBoundsAndNormalize):
+        // -globalCenter -> sceneRotation -> scale -> alignRotation -> -clusterCenter.
+        // The last two steps were previously missing, so cameras landed outside
+        // their cluster's local frame (appearing above/around the points).
         return cameras.map(cam => {
             const pos = cam.position.clone().sub(center);
             pos.applyMatrix4(rot);
             pos.multiplyScalar(scale);
+            if (align) pos.applyMatrix4(align);
+            if (originalCenter) pos.sub(originalCenter);
 
-            const look = cam.look.clone().applyMatrix4(rot).normalize();
-            const up = cam.up.clone().applyMatrix4(rot).normalize();
-            const right = cam.right.clone().applyMatrix4(rot).normalize();
+            const look = cam.look.clone().applyMatrix4(rot);
+            const up = cam.up.clone().applyMatrix4(rot);
+            const right = cam.right.clone().applyMatrix4(rot);
+            if (align) {
+                look.applyMatrix4(align);
+                up.applyMatrix4(align);
+                right.applyMatrix4(align);
+            }
+            look.normalize();
+            up.normalize();
+            right.normalize();
 
             return { position: pos, look, up, right };
         });
     }
 
-    buildFrustumGroup(cameras, clusterPath) {
-        const group = new THREE.Group();
-        group.userData.clusterPath = clusterPath;
-
-        const cluster = this.clusters.get(clusterPath);
-        const clusterRadius = cluster ? cluster.radius : 1;
-
+    /**
+     * Build the wireframe-pyramid geometry for a set of transformed cameras at the
+     * current frustumRelativeSize. Split out from buildFrustumGroup so the size can
+     * be changed live (rebuildAllFrustums) without reloading camera data.
+     */
+    buildFrustumGeometry(cameras, clusterRadius) {
         const frustumLength = clusterRadius * this.frustumRelativeSize;
         const halfH = Math.tan(THREE.MathUtils.degToRad(this.frustumFovY / 2)) * frustumLength;
         const halfW = halfH * this.frustumAspect;
@@ -127,11 +157,8 @@ export class FrustumEngine {
         const vertices = [];
         const colors = [];
 
-        // Warm brown family: per-cluster variation stays within earthy tones
-        // instead of the full neon spectrum.
-        const hue = this.pathToHue(clusterPath);
-        const brownHue = 0.05 + hue * 0.06;   // 0.05-0.11: brick to sand
-        const color = new THREE.Color().setHSL(brownHue, 0.45, 0.48 + hue * 0.12);
+        // Kathir's look: every camera frustum is the same coral-red wireframe.
+        const color = new THREE.Color(0xe8564a);
 
         for (const cam of cameras) {
             const localPos = cam.position.clone();
@@ -158,23 +185,46 @@ export class FrustumEngine {
             }
         }
 
-        if (vertices.length === 0) return group;
+        if (vertices.length === 0) return null;
 
         const geom = new THREE.BufferGeometry();
         geom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
         geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        return geom;
+    }
+
+    buildFrustumGroup(cameras, clusterPath) {
+        const group = new THREE.Group();
+        group.userData.clusterPath = clusterPath;
+        group.userData.cameraCount = cameras.length;
+
+        const cluster = this.clusters.get(clusterPath);
+        const clusterRadius = cluster ? cluster.radius : 1;
+
+        const geom = this.buildFrustumGeometry(cameras, clusterRadius);
+        if (!geom) return group;
 
         const mat = new THREE.LineBasicMaterial({
             vertexColors: true,
             transparent: true,
-            opacity: 0.6,
+            opacity: 0.85,
             depthWrite: false
         });
 
         const lines = new THREE.LineSegments(geom, mat);
         group.add(lines);
 
-        this.worldGroup.add(group);
+        // Parent the frustum group to its cluster's group (identity local
+        // transform) so it inherits the exact same position/scale as the point
+        // cloud and follows every layout and final-view animation. Previously it
+        // lived in worldGroup at a static hierarchyPosition snapshot, which made
+        // the cameras drift away when clusters moved (e.g. the final collapse to
+        // origin). Fall back to worldGroup only if the cluster has no group.
+        if (cluster && cluster.group) {
+            cluster.group.add(group);
+        } else {
+            this.worldGroup.add(group);
+        }
         return group;
     }
 
@@ -189,14 +239,8 @@ export class FrustumEngine {
     showForCluster(clusterPath) {
         const group = this.frustumGroups.get(clusterPath);
         if (!group) return;
-
-        const cluster = this.clusters.get(clusterPath);
-        if (cluster && cluster.hierarchyPosition) {
-            group.position.copy(cluster.hierarchyPosition);
-        }
-        if (cluster && cluster.fitScale) {
-            group.scale.setScalar(cluster.fitScale);
-        }
+        // Position/scale are inherited from the parent cluster.group; only
+        // toggle visibility here.
         group.visible = true;
     }
 
@@ -209,6 +253,53 @@ export class FrustumEngine {
         for (const group of this.frustumGroups.values()) {
             group.visible = false;
         }
+    }
+
+    /**
+     * Live-adjust the frustum size (Akshay: make it a parameter). Rebuilds every
+     * frustum group's geometry in place from the cached cameras at the new size,
+     * preserving each group's parent, visibility and material opacity.
+     */
+    setFrustumSize(relSize) {
+        if (!(relSize >= 0)) return;
+        this.frustumRelativeSize = relSize;
+        this.rebuildAllFrustums();
+    }
+
+    rebuildAllFrustums() {
+        for (const [path, group] of this.frustumGroups) {
+            const cameras = this.camerasByPath.get(path);
+            if (!cameras) continue;
+            const cluster = this.clusters.get(path);
+            const clusterRadius = cluster ? cluster.radius : 1;
+
+            const old = group.children[0];
+            const prevOpacity = old && old.material ? old.material.opacity : 0.85;
+            const prevVisible = group.visible;
+
+            const geom = this.buildFrustumGeometry(cameras, clusterRadius);
+            // Remove old line segments.
+            if (old) {
+                group.remove(old);
+                if (old.geometry) old.geometry.dispose();
+                if (old.material) old.material.dispose();
+            }
+            if (!geom) continue;
+
+            const mat = new THREE.LineBasicMaterial({
+                vertexColors: true,
+                transparent: true,
+                opacity: prevOpacity,
+                depthWrite: false
+            });
+            const lines = new THREE.LineSegments(geom, mat);
+            group.add(lines);
+            group.visible = prevVisible;
+        }
+    }
+
+    getFrustumSize() {
+        return this.frustumRelativeSize;
     }
 
     fadeOutCluster(clusterPath, duration = 500) {
@@ -231,14 +322,7 @@ export class FrustumEngine {
         const group = this.frustumGroups.get(clusterPath);
         if (!group) return;
 
-        const cluster = this.clusters.get(clusterPath);
-        if (cluster && cluster.hierarchyPosition) {
-            group.position.copy(cluster.hierarchyPosition);
-        }
-        if (cluster && cluster.fitScale) {
-            group.scale.setScalar(cluster.fitScale);
-        }
-
+        // Position/scale are inherited from the parent cluster.group.
         const lineMat = group.children[0]?.material;
         if (lineMat) {
             lineMat.opacity = 0;
@@ -249,7 +333,7 @@ export class FrustumEngine {
             group,
             material: lineMat,
             startOpacity: 0,
-            targetOpacity: 0.6,
+            targetOpacity: 0.85,
             startTime: performance.now(),
             duration,
             fadeIn: true

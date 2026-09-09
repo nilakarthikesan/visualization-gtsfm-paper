@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createPointMaterial, applyBlendMode } from './point-material.js?v=38';
+import { createPointMaterial, applyBlendMode } from './point-material.js?v=45';
 
 export class SquarenessAnimationEngine {
     constructor(clusters, layoutEngine, worldGroup) {
@@ -8,11 +8,25 @@ export class SquarenessAnimationEngine {
         this.worldGroup = worldGroup;
         this.mergeEvents = [];
         this.activeAnimations = [];
-        this.mergeDuration = 0.8;
-        this.leafConvergeDuration = 0.8;
+        // Materialization durations for a single cluster/merge. These are a fixed
+        // look-and-feel choice and are deliberately NOT tied to the timeline speed:
+        // the speed slider controls how much real computation time is compressed
+        // between events, not how fast a cluster forms once it starts.
+        this.baseMergeDuration = 0.8;
+        this.baseConvergeDuration = 0.8;
+        this.mergeDuration = this.baseMergeDuration;
+        this.leafConvergeDuration = this.baseConvergeDuration;
+        this.speed = 1;
 
         this.particleEngine = null;
         this.convergenceEngine = null;
+        // Flow-field swirl on merges (prototype ?flow=1). Bows the merge paths
+        // mid-flight along the same field the idle drift uses, then settles.
+        this.flowEnabled = false;
+        this.flowFreq = 0.08;
+        this.flowSpeed = 0.5;
+        this.swirlAmp = 4.0;
+        this._swirlTmp = [0, 0, 0];
         this.preMatchedCloud = null;
         this.preChildOnlyCloud = null;
         this.preMergedOnlyCloud = null;
@@ -82,6 +96,18 @@ export class SquarenessAnimationEngine {
         }
     }
 
+    // Live playback speed. Scales the per-event materialization animations so a
+    // faster speed makes clusters snap in quicker (and the play loop shortens the
+    // real-time pauses by the same factor). 1 = base look.
+    setSpeed(mult) {
+        this.speed = Math.max(0.05, mult || 1);
+        this.mergeDuration = this.baseMergeDuration / this.speed;
+        this.leafConvergeDuration = this.baseConvergeDuration / this.speed;
+        if (this.convergenceEngine) {
+            this.convergenceEngine.convergeDuration = this.baseConvergeDuration / this.speed;
+        }
+    }
+
     initTimeline() {
         const treeNodes = this.layoutEngine.treeNodes;
         if (!treeNodes || treeNodes.length === 0) {
@@ -105,45 +131,88 @@ export class SquarenessAnimationEngine {
         const hasTimestamps = allEvents.some(e => e.timestamp > 0);
 
         if (hasTimestamps) {
+            // Topological-safe timing. A merge cannot complete before its inputs
+            // exist, but raw file mtimes for deep single-child chains can put a
+            // parent slightly BEFORE its child. applyEventInstant hides a merge's
+            // children when the merge is processed, so if a child were ordered AFTER
+            // its parent it would be re-shown and never hidden again -> ghost clouds
+            // stranded at huge offsets in the final view. We derive an
+            // effectiveTime = max(own timestamp, latest descendant time) so every
+            // parent is ordered strictly after all of its descendants, while
+            // preserving the real gaps wherever the timestamps are already
+            // tree-consistent. This is dataset-agnostic (fixes any merge tree).
+            const pathToEvent = new Map(allEvents.map(e => [e.path, e]));
+            const effCache = new Map();
+            const effTime = (e) => {
+                if (effCache.has(e.path)) return effCache.get(e.path);
+                let t = e.timestamp || 0;
+                for (const cp of e.children) {
+                    const ce = pathToEvent.get(cp);
+                    if (ce) t = Math.max(t, effTime(ce));
+                }
+                effCache.set(e.path, t);
+                return t;
+            };
+            for (const e of allEvents) e.effTime = effTime(e);
+
             allEvents.sort((a, b) => {
-                if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+                if (a.effTime !== b.effTime) return a.effTime - b.effTime;
+                // Same effective time: deeper (child) before shallower (parent) so a
+                // merge never precedes a descendant; leaves before merges; then path.
+                if (a.depth !== b.depth) return b.depth - a.depth;
                 if (a.isLeaf !== b.isLeaf) return a.isLeaf ? -1 : 1;
                 return a.cluster.path.localeCompare(b.cluster.path);
             });
 
-            const TOTAL_ANIMATION_SEC = 8;
-            const MIN_GAP_SEC = 0.18;
-            const MAX_GAP_SEC = 0.4;
-            const epochs = allEvents.map(e => e.timestamp);
-            const minEpoch = Math.min(...epochs);
-            const maxEpoch = Math.max(...epochs);
-            const realSpan = maxEpoch - minEpoch;
-
-            for (let i = 0; i < allEvents.length; i++) {
-                if (realSpan > 0) {
-                    const normalizedT = (allEvents[i].timestamp - minEpoch) / realSpan;
-                    allEvents[i].animationTime = normalizedT * TOTAL_ANIMATION_SEC;
-                } else {
-                    allEvents[i].animationTime = i * 1.0;
-                }
-            }
-
+            // Faithful real-timing (Frank): pace each event by the REAL number of
+            // seconds that elapsed between it and the previous event, instead of
+            // squashing everything into a fixed window with a hard max-gap clamp
+            // (the old TOTAL_ANIMATION_SEC / MAX_GAP_SEC=0.4 made every gap read as
+            // ~uniform, i.e. a fixed DT). We store the real gap in seconds on each
+            // event; the play loop maps real seconds -> playback seconds using the
+            // live speed slider, so long compute pauses (e.g. bundle adjustment)
+            // feel long and quick VGGT bursts feel quick.
+            //
+            // One thing the wall clock includes that we do not want is idle time:
+            // Dask sometimes sits between subtrees without computing anything (the
+            // Brussels run has a single 17.4h overnight stall against a 20s median
+            // gap). Those stalls are not computation, so replaying them is dead air,
+            // but every other long gap IS real work (a 373s VGGT pass should feel
+            // ~2.6x longer than a 140s one) and must survive.
+            //
+            // So instead of one hardcoded ceiling, derive the stall threshold from
+            // the run's own gap distribution: a stall is an extreme outlier well
+            // beyond the 95th percentile of normal gaps. This adapts per dataset,
+            // which matters because Thanjavur's longest real gap (410s) exceeds the
+            // ceiling a Brussels-tuned constant would have imposed.
+            const rawGaps = [];
             for (let i = 1; i < allEvents.length; i++) {
-                const gap = allEvents[i].animationTime - allEvents[i - 1].animationTime;
-                if (gap < MIN_GAP_SEC) {
-                    allEvents[i].animationTime = allEvents[i - 1].animationTime + MIN_GAP_SEC;
-                }
+                rawGaps.push(Math.max(0, allEvents[i].effTime - allEvents[i - 1].effTime));
             }
+            const sorted = [...rawGaps].sort((a, b) => a - b);
+            const p95 = sorted.length ? sorted[Math.floor(sorted.length * 0.95)] : 0;
+            const stallSec = Math.max(60, p95 * 3);
+            // A stall is rendered as the longest *genuine* gap in the run, so the
+            // build never sits idle longer than its slowest real computation did.
+            const longestReal = sorted.filter(g => g <= stallSec).pop() || stallSec;
 
             for (let i = 0; i < allEvents.length; i++) {
                 if (i === 0) {
-                    allEvents[i].delay = 0.15;
+                    allEvents[i].realGapSec = 0;
                 } else {
-                    allEvents[i].delay = Math.min(
-                        allEvents[i].animationTime - allEvents[i - 1].animationTime,
-                        MAX_GAP_SEC
-                    );
+                    const raw = rawGaps[i - 1];
+                    allEvents[i].wasStall = raw > stallSec;
+                    allEvents[i].realGapSec = allEvents[i].wasStall ? longestReal : raw;
                 }
+            }
+            const stalls = allEvents.filter(e => e.wasStall).length;
+            console.log(`Timeline pacing: p95 gap ${p95.toFixed(0)}s, stall threshold ` +
+                        `${stallSec.toFixed(0)}s, ${stalls} idle stall(s) shown as ` +
+                        `${longestReal.toFixed(0)}s (longest real gap)`);
+
+            // Legacy per-event delay (used for manual stepping / non-play fallback).
+            for (let i = 0; i < allEvents.length; i++) {
+                allEvents[i].delay = i === 0 ? 0.15 : 0.2;
             }
         } else {
             const leaves = allEvents.filter(e => e.isLeaf);
@@ -152,7 +221,7 @@ export class SquarenessAnimationEngine {
             merges.sort((a, b) => b.depth - a.depth || a.cluster.path.localeCompare(b.cluster.path));
             allEvents.length = 0;
             allEvents.push(...leaves, ...merges);
-            for (const e of allEvents) e.delay = 0.12;
+            for (const e of allEvents) { e.delay = 0.12; e.realGapSec = 0; }
         }
 
         this.mergeEvents = allEvents;
@@ -524,8 +593,26 @@ export class SquarenessAnimationEngine {
         });
     }
 
+    setFlowEnabled(v) {
+        this.flowEnabled = !!v;
+    }
+
+    // Adds a decaying flow-field bow to a point mid-transition. The envelope
+    // sin(pe*PI) is 0 at both ends so points still leave from and arrive at
+    // their exact positions; it peaks mid-flight for a swirling "mesh-in".
+    _applySwirl(arr, j3, pe, swirlTime) {
+        const env = Math.sin(pe * Math.PI) * this.swirlAmp;
+        if (env <= 0.0001) return;
+        const f = this.flowFreq;
+        const x = arr[j3] * f, y = arr[j3 + 1] * f, z = arr[j3 + 2] * f;
+        arr[j3]     += (Math.sin(y + swirlTime)       + Math.sin(z * 1.3 + swirlTime * 0.7)) * env;
+        arr[j3 + 1] += (Math.sin(z + swirlTime * 1.1) + Math.sin(x * 1.3 + swirlTime * 0.9)) * env;
+        arr[j3 + 2] += (Math.sin(x + swirlTime * 1.3) + Math.sin(y * 1.3 + swirlTime * 0.6)) * env;
+    }
+
     update(dt) {
         const now = performance.now();
+        const swirlTime = this.flowEnabled ? (now / 1000) * this.flowSpeed : 0;
         for (let i = this.activeAnimations.length - 1; i >= 0; i--) {
             const a = this.activeAnimations[i];
             const t = Math.min((now - a.startTime) / a.duration, 1);
@@ -564,6 +651,7 @@ export class SquarenessAnimationEngine {
                         mArr[j3]     = ms[j3]     + (me[j3]     - ms[j3])     * pe;
                         mArr[j3 + 1] = ms[j3 + 1] + (me[j3 + 1] - ms[j3 + 1]) * pe;
                         mArr[j3 + 2] = ms[j3 + 2] + (me[j3 + 2] - ms[j3 + 2]) * pe;
+                        if (this.flowEnabled) this._applySwirl(mArr, j3, pe, swirlTime);
                     }
                     this.preMatchedCloud.geometry.attributes.position.needsUpdate = true;
 
@@ -578,6 +666,7 @@ export class SquarenessAnimationEngine {
                         coArr[j3]     = cs[j3]     + (ce[j3]     - cs[j3])     * pe;
                         coArr[j3 + 1] = cs[j3 + 1] + (ce[j3 + 1] - cs[j3 + 1]) * pe;
                         coArr[j3 + 2] = cs[j3 + 2] + (ce[j3 + 2] - cs[j3 + 2]) * pe;
+                        if (this.flowEnabled) this._applySwirl(coArr, j3, pe, swirlTime);
                     }
                     this.preChildOnlyCloud.geometry.attributes.position.needsUpdate = true;
 
@@ -592,6 +681,7 @@ export class SquarenessAnimationEngine {
                         moArr[j3]     = mos[j3]     + (moe[j3]     - mos[j3])     * pe;
                         moArr[j3 + 1] = mos[j3 + 1] + (moe[j3 + 1] - mos[j3 + 1]) * pe;
                         moArr[j3 + 2] = mos[j3 + 2] + (moe[j3 + 2] - mos[j3 + 2]) * pe;
+                        if (this.flowEnabled) this._applySwirl(moArr, j3, pe, swirlTime);
                     }
                     this.preMergedOnlyCloud.geometry.attributes.position.needsUpdate = true;
 

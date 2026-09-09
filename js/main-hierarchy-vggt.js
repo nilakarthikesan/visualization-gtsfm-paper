@@ -4,16 +4,16 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=42';
-import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=43';
-import { InteractionEngine } from './interaction-engine.js?v=5';
-import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=42';
+import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=53';
+import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=50';
+import { InteractionEngine } from './interaction-engine.js?v=6';
+import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=47';
 import { CameraEngine } from './camera-engine.js?v=40';
-import { updatePointScale, applyBlendMode, BLEND_MODES } from './point-material.js?v=40';
-import { FrustumEngine } from './frustum-engine.js?v=31';
+import { updatePointScale, applyBlendMode, BLEND_MODES, updateFlowTime, setFlowParams, setPointSizeScale } from './point-material.js?v=46';
+import { FrustumEngine } from './frustum-engine.js?v=38';
 import { EDLPass } from './edl-pass.js?v=40';
 import { ParticleEngine } from './particle-engine.js?v=40';
-import { ConvergenceEngine } from './convergence-engine.js?v=42';
+import { ConvergenceEngine } from './convergence-engine.js?v=43';
 
 const VignetteShader = {
     uniforms: {
@@ -81,14 +81,50 @@ const ColorGradingShader = {
 
 class VGGTHierarchyApp {
     constructor() {
-        this.blendMode = localStorage.getItem('gh-blend-mode') || 'sharp';
+        // Flow-field prototype: ?flow=1 turns on the glowing points + curl drift
+        // look (modeled after GPGPU flow-field particle demos) without changing
+        // defaults for the main site.
+        this.flowMode = new URLSearchParams(window.location.search).get('flow') === '1';
+        this.blendMode = this.flowMode ? 'glow' : (localStorage.getItem('gh-blend-mode') || 'sharp');
         this.cameraAnimTarget = null;
         this.gradientBg = localStorage.getItem('gh-bg') || 'none';
         this.groundGridEnabled = localStorage.getItem('gh-grid') === 'true';
-        this.edlEnabled = localStorage.getItem('gh-edl') !== 'false';
+        // EDL off by default: its depth-based shading draws a dark ring around
+        // every point sprite (the "black circles" feedback). Still available as
+        // an opt-in via the toggle for users who want the depth cue.
+        this.edlEnabled = localStorage.getItem('gh-edl') === 'true';
         this.vignetteEnabled = localStorage.getItem('gh-vignette') !== 'false';
         this.particlesEnabled = localStorage.getItem('gh-particles') === 'true';
         this.cameraMode = 'free';
+        // Auto-frame: master toggle (default on) for the cinematic camera that follows
+        // the build. userCameraOverride is a runtime flag set the moment the user grabs
+        // the camera, so auto-framing cedes control until Reset (smart-suspend).
+        this.autoFrameEnabled = localStorage.getItem('gh-auto-frame') !== 'false';
+        this.userCameraOverride = false;
+        // Playback speed (Frank): the timeline is paced by the REAL seconds between
+        // pipeline events; this multiplier speeds up/slows down that replay. 1 = base.
+        // Playback speed expressed directly in "x real-time" (Frank): speedX real
+        // seconds of computation play in 1 viz second. speedX = 1 is true 1:1
+        // real-time (very long, the "turn back to realtime" option); the default is
+        // a compressed value chosen so the whole build runs in ~TARGET_VIZ_SEC.
+        this.MAX_SPEEDX = 500;          // slider top: 500x real-time
+        this.MIN_SPEEDX = 1;            // slider bottom: true real-time
+        this.TARGET_VIZ_SEC = 45;       // default target playback length
+        this.speedX = parseFloat(localStorage.getItem('gh-speed-x')) || 0; // 0 => auto-pick on load
+        this.realSpanSec = 0;           // sum of (capped) real seconds between events
+        // Fixed-frame ("lock the whole build") camera: instead of the camera chasing
+        // the growing visible set event-by-event, frame the ENTIRE final floorplan
+        // once and hold it. This is the area-universal / slicing-floorplan behavior -
+        // clusters appear in their final cells and merges fuse adjacent cells in
+        // place, so there is essentially no camera motion during the build (only the
+        // finale collapse moves). Default ON (it's the math we're trying); toggleable.
+        this.fixedFrame = localStorage.getItem('gh-fixed-frame') !== 'false';
+        try {
+            const p = new URLSearchParams(window.location.search);
+            const c = p.get('camera');
+            if (c === 'fixed') this.fixedFrame = true;
+            else if (c === 'follow') this.fixedFrame = false;
+        } catch (e) { /* non-browser */ }
         this.initThree();
         this.initUI();
     }
@@ -114,6 +150,13 @@ class VGGTHierarchyApp {
         this.orbitControls.enableDamping = true;
         this.orbitControls.dampingFactor = 0.05;
         this.orbitControls.autoRotate = false;
+        // As soon as the user grabs the camera (orbit/pan/zoom), cede control: suspend
+        // auto-framing and cancel any in-flight auto move so it doesn't fight the user.
+        // Control resumes on Reset (or re-enabling the Auto-Frame toggle).
+        this.orbitControls.addEventListener('start', () => {
+            this.userCameraOverride = true;
+            this.cameraAnimTarget = null;
+        });
         
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
         this.scene.add(ambientLight);
@@ -247,11 +290,12 @@ class VGGTHierarchyApp {
 
     initTheme() {
         const params = new URLSearchParams(window.location.search);
-        const isEmbed = params.get('embed') === '1';
-        // ?bg=white forces a light start (used by the paper-page demo); otherwise
-        // embed defaults to dark and the standalone viewer honors the saved theme.
+        // Kathir's "paper" look is the default: clean white background everywhere
+        // (including the embedded demo). Dark is opt-in via ?theme=dark or the
+        // saved toggle; ?bg=white still forces light.
         const forceWhite = params.get('bg') === 'white';
-        this.isDark = forceWhite ? false : (isEmbed || localStorage.getItem('gh-theme') === 'dark');
+        const forceDark = params.get('theme') === 'dark';
+        this.isDark = !forceWhite && (forceDark || localStorage.getItem('gh-theme') === 'dark');
         if (this.isDark) {
             document.body.classList.add('dark-theme');
             this.scene.background = new THREE.Color(0x0a0a0a);
@@ -425,6 +469,105 @@ class VGGTHierarchyApp {
                 const v = parseFloat(e.target.value);
                 if (this.edlPass) this.edlPass.edlRadius = v;
                 localStorage.setItem('gh-edl-radius', v);
+            });
+        }
+
+        // Camera frustum size (Akshay: expose as a parameter). Rebuilds the coral
+        // wireframes live; persisted so the chosen size sticks across reloads.
+        const frustumSizeSlider = document.getElementById('slider-frustum-size');
+        if (frustumSizeSlider) {
+            const savedFr = parseFloat(localStorage.getItem('gh-frustum-size'));
+            if (!isNaN(savedFr)) frustumSizeSlider.value = savedFr;
+            frustumSizeSlider.addEventListener('input', (e) => {
+                const v = parseFloat(e.target.value);
+                if (this.frustumEngine) this.frustumEngine.setFrustumSize(v);
+                localStorage.setItem('gh-frustum-size', v);
+            });
+        }
+
+        // Point size (Xinan: expose as a control). Scales the rendered disc size
+        // live and persists across reloads. The slider's displayed value is synced
+        // in start() once the dataset's default pointScale is known.
+        const pointSizeSlider = document.getElementById('slider-point-size');
+        if (pointSizeSlider) {
+            pointSizeSlider.addEventListener('input', (e) => {
+                const v = parseFloat(e.target.value);
+                setPointSizeScale(v);
+                this.applyBlendModeToAll();
+                localStorage.setItem('gh-point-size', v);
+            });
+        }
+
+        // Auto-Frame Camera: master toggle for the cinematic follow. Off = the camera
+        // is never touched (you drive the whole time). On = it follows the build, but
+        // still cedes control the instant you grab the camera (until Reset).
+        const autoFrameToggle = document.getElementById('toggle-auto-frame');
+        if (autoFrameToggle) {
+            autoFrameToggle.checked = this.autoFrameEnabled;
+            autoFrameToggle.addEventListener('change', (e) => {
+                this.autoFrameEnabled = e.target.checked;
+                localStorage.setItem('gh-auto-frame', this.autoFrameEnabled);
+                if (this.autoFrameEnabled) {
+                    // Turning it back on = "follow again": drop the manual override and
+                    // re-frame the current state right away.
+                    this.userCameraOverride = false;
+                    if (this.fixedFrame) this.fitCameraToLayoutBounds();
+                    else this.fitCameraToVisible();
+                }
+            });
+        }
+
+        // Lock Frame: hold one frame around the whole build (fixed-frame / area-
+        // universal behavior) vs. following the growing visible set. On = minimal
+        // camera motion, clusters appear and merge in place.
+        const lockFrameToggle = document.getElementById('toggle-lock-frame');
+        if (lockFrameToggle) {
+            lockFrameToggle.checked = this.fixedFrame;
+            lockFrameToggle.addEventListener('change', (e) => {
+                this.fixedFrame = e.target.checked;
+                localStorage.setItem('gh-fixed-frame', this.fixedFrame);
+                this.userCameraOverride = false;
+                if (this.fixedFrame) this.fitCameraToLayoutBounds();
+                else this.fitCameraToVisible();
+            });
+        }
+
+        // Cluster Gap: space between neighboring tiles (treemap PADDING_FRAC). Higher
+        // = more breathing room so clusters don't read as crowded. Re-tiles live.
+        const tileGapSlider = document.getElementById('slider-tile-gap');
+        if (tileGapSlider) {
+            const saved = parseFloat(localStorage.getItem('gh-tile-gap'));
+            if (!isNaN(saved)) tileGapSlider.value = saved;
+            tileGapSlider.addEventListener('input', (e) => {
+                const v = parseFloat(e.target.value);
+                if (this.layoutEngine) { this.layoutEngine.PADDING_FRAC = v; this.scheduleRelayout(); }
+                localStorage.setItem('gh-tile-gap', v);
+            });
+        }
+
+        // Cluster Fill: how much of its tile each cluster fills (treemap FIT_FRAC).
+        // Lower = more air around each cluster. Re-tiles live.
+        const tileFillSlider = document.getElementById('slider-tile-fill');
+        if (tileFillSlider) {
+            const saved = parseFloat(localStorage.getItem('gh-tile-fill'));
+            if (!isNaN(saved)) tileFillSlider.value = saved;
+            tileFillSlider.addEventListener('input', (e) => {
+                const v = parseFloat(e.target.value);
+                if (this.layoutEngine) { this.layoutEngine.FIT_FRAC = v; this.scheduleRelayout(); }
+                localStorage.setItem('gh-tile-fill', v);
+            });
+        }
+
+        // Playback Speed (Frank): the slider reads directly in "x real-time". It's
+        // log-scaled from 1x (true real-time, far left = "turn back to realtime") up
+        // to MAX_SPEEDX. The readout reports the factor plus the resulting length.
+        const speedSlider = document.getElementById('slider-timeline-speed');
+        if (speedSlider) {
+            if (this.speedX) speedSlider.value = this._speedXToPos(this.speedX);
+            speedSlider.addEventListener('input', (e) => {
+                const sx = this._posToSpeedX(parseFloat(e.target.value));
+                this.applyTimelineSpeed(sx);
+                localStorage.setItem('gh-speed-x', sx);
             });
         }
 
@@ -603,6 +746,8 @@ class VGGTHierarchyApp {
         if (!select) return;
 
         for (const [key, ds] of Object.entries(DATASETS)) {
+            // Hidden datasets stay reachable via ?dataset=<key> but are not offered.
+            if (ds.hidden && key !== this.datasetKey) continue;
             const opt = document.createElement('option');
             opt.value = key;
             opt.textContent = ds.label;
@@ -619,8 +764,30 @@ class VGGTHierarchyApp {
     async start() {
         try {
             const params = new URLSearchParams(window.location.search);
-            const requested = params.get('dataset') || 'original';
-            this.datasetKey = DATASETS[requested] ? requested : 'original';
+            const requested = params.get('dataset') || 'BRUSSELS';
+            this.datasetKey = DATASETS[requested] ? requested : 'BRUSSELS';
+
+            // Point size: dense "fine" clouds want small points, sparse "sampled"
+            // clouds want big ones. Use the dataset's pointScale (default 1.0),
+            // overridable live via window.setPointSizeScale() or ?psize= in the URL.
+            // Priority: ?psize= URL override > persisted slider value > dataset default.
+            const dsScale = DATASETS[this.datasetKey].pointScale;
+            const urlScale = parseFloat(params.get('psize'));
+            const savedScale = parseFloat(localStorage.getItem('gh-point-size'));
+            const effScale = !isNaN(urlScale)
+                ? urlScale
+                : (!isNaN(savedScale) ? savedScale : (dsScale || 1.0));
+            setPointSizeScale(effScale);
+            const pointSizeSlider = document.getElementById('slider-point-size');
+            if (pointSizeSlider) pointSizeSlider.value = effScale;
+            if (typeof window !== 'undefined') {
+                window.setPointSizeScale = (s) => {
+                    setPointSizeScale(s);
+                    this.applyBlendModeToAll();
+                    if (pointSizeSlider) pointSizeSlider.value = s;
+                };
+            }
+
             this.initDatasetSelect();
 
             this.dataLoader = new VGGTDataLoader(this.datasetKey);
@@ -647,19 +814,60 @@ class VGGTHierarchyApp {
 
             this.applyBlendModeToAll();
 
+            if (this.flowMode) {
+                // Amplitude in world units; freq tuned so the wavelength (~80u) is
+                // near cluster size (~47u) → whole clusters flow coherently rather
+                // than shimmering. Calibrated against the ~500u layout span.
+                setFlowParams({ amp: 2.0, freq: 0.08, speed: 0.5 });
+                if (typeof window !== 'undefined') window.setFlowParams = setFlowParams;
+            }
+
             this.layoutEngine = new SquarenessLayoutEngine(clusters);
+            // Apply any persisted layout-spacing choices (Cluster Gap / Fill sliders)
+            // before the first layout so the saved crowding sticks across reloads.
+            const savedGap = parseFloat(localStorage.getItem('gh-tile-gap'));
+            if (!isNaN(savedGap)) this.layoutEngine.PADDING_FRAC = savedGap;
+            const savedFill = parseFloat(localStorage.getItem('gh-tile-fill'));
+            if (!isNaN(savedFill)) this.layoutEngine.FIT_FRAC = savedFill;
             this.layoutEngine.computeLayout();
 
             this.convergenceEngine = new ConvergenceEngine();
 
             this.animationEngine = new SquarenessAnimationEngine(clusters, this.layoutEngine, this.worldGroup);
             this.animationEngine.convergenceEngine = this.convergenceEngine;
+            if (this.flowMode) this.animationEngine.setFlowEnabled(true);
             this.animationEngine.initTransitionBuffers(this.blendMode, this.isDark);
             this.events = this.animationEngine.initTimeline();
             this.currentEventIndex = 0;
 
+            // realSpanSec = total real seconds of computation we replay (idle stalls
+            // already collapsed by the animation engine). At speedX the inter-event
+            // pauses are realGap/speedX, so this drives the default speed and readout.
+            this.realSpanSec = 0;
+            for (const e of this.events) {
+                this.realSpanSec += (typeof e.realGapSec === 'number' ? e.realGapSec : 0);
+            }
+            // Auto-pick a compressed default the first time (no saved preference).
+            // Every event costs at least one materialization animation, so that floor
+            // sets the shortest possible play-through; aim for TARGET_VIZ_SEC but never
+            // ask for a speed the floor makes unreachable (which would only misreport
+            // the rate while looking identical).
+            if (!this.speedX || this.speedX < this.MIN_SPEEDX) {
+                const animFloor = this.events.length *
+                    (this.animationEngine.baseMergeDuration || 0.8);
+                const target = Math.max(this.TARGET_VIZ_SEC, animFloor * 1.25);
+                this.speedX = this._clampSpeedX(this.realSpanSec / target);
+            }
+            this.applyTimelineSpeed(this.speedX);
+
             const leafClusters = this.animationEngine.getLeafClusters();
             this.convergenceEngine.prepareAllLeaves(leafClusters);
+
+            // Frame the composed layout right away, BEFORE the (slow) frustum load,
+            // so the scene is correctly framed immediately instead of sitting at the
+            // default camera until frustums finish. Re-applied after full load below.
+            if (this.fixedFrame) this.fitCameraToLayoutBounds(true);
+            else this.fitCameraToAllLeaves(true);
 
             this.interactionEngine = new InteractionEngine(
                 this.camera, 
@@ -670,10 +878,19 @@ class VGGTHierarchyApp {
 
             this.cameraEngine = new CameraEngine(this.camera, this.orbitControls);
 
-            // Camera frustums removed from this viewer: they sprawled beyond each
-            // cluster's footprint and overlapped neighbors. The engine is kept as an
-            // empty instance so the syncToEventIndex/show/hide calls stay no-ops.
+            // Red camera frustums (Kathir's look): one wireframe per camera, loaded
+            // from each cluster's images.txt and synced to the timeline.
             this.frustumEngine = new FrustumEngine(this.worldGroup);
+            this.ui.loadingText.textContent = 'Loading camera frustums...';
+            await this.frustumEngine.loadForClusters(this.dataLoader.clusters, this.dataLoader);
+
+            // Apply a persisted frustum size (from the UI slider) once the frustums
+            // exist, and expose a live global for quick tuning.
+            const savedFrustum = parseFloat(localStorage.getItem('gh-frustum-size'));
+            if (!isNaN(savedFrustum)) this.frustumEngine.setFrustumSize(savedFrustum);
+            if (typeof window !== 'undefined') {
+                window.setFrustumSize = (s) => this.frustumEngine.setFrustumSize(s);
+            }
 
             this.particleEngine = new ParticleEngine(this.worldGroup);
             this.particleEngine.enabled = this.particlesEnabled;
@@ -700,7 +917,8 @@ class VGGTHierarchyApp {
                 this.frustumEngine.syncToEventIndex(this.events, 0);
             }
 
-            this.fitCameraToAllLeaves(true);
+            if (this.fixedFrame) this.fitCameraToLayoutBounds(true);
+            else this.fitCameraToAllLeaves(true);
 
             this.isPlaying = false;
             this.lastStepTime = 0;
@@ -720,7 +938,62 @@ class VGGTHierarchyApp {
         }
     }
 
+    /**
+     * Whether the camera may auto-frame right now. False when the user turned the
+     * Auto-Frame toggle off, or when they have manually grabbed the camera (until
+     * Reset). Geometry assembly is never gated on this - only camera moves are.
+     */
+    shouldAutoFrame() {
+        return this.autoFrameEnabled && !this.userCameraOverride;
+    }
+
+    /**
+     * Panel-aware top-down (+Z) framing of the XY box centered at (cx, cy) with the
+     * given world width/height. Reserves the horizontal band covered by the fixed
+     * Visual Settings panel so clusters are never drawn behind it: it zooms out just
+     * enough that the model fills only the visible (1 - frac) width, then shifts the
+     * aim so the model sits centered in that visible band. When the panel is hidden
+     * (embed mode) or collapsed to nothing, frac = 0 and this is a plain centered fit.
+     */
+    computePanelFraming(cx, cy, width, height, margin, minDist = 8) {
+        const aspect = window.innerWidth / window.innerHeight;
+        const vFovRad = THREE.MathUtils.degToRad(this.camera.fov / 2);
+        const hFovRad = Math.atan(aspect * Math.tan(vFovRad));
+
+        let frac = 0;
+        const el = document.getElementById('visual-settings');
+        if (el && el.offsetParent !== null && getComputedStyle(el).display !== 'none') {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && window.innerWidth > 0) {
+                // Panel width plus its right margin, capped so we never reserve an
+                // absurd amount on very narrow windows.
+                frac = Math.min(0.45, (r.width + 40) / window.innerWidth);
+            }
+        }
+
+        const effWidth = frac > 0 ? width / (1 - frac) : width;
+        const distForHeight = (height / 2) / Math.tan(vFovRad);
+        const distForWidth = (effWidth / 2) / Math.tan(hFovRad);
+        let dist = Math.max(distForHeight, distForWidth) * margin;
+        dist = Math.max(dist, minDist);
+
+        // Move the aim right by half the reserved band so the model centers in the
+        // open (left) region rather than under the panel.
+        const frameWorldWidth = 2 * dist * Math.tan(hFovRad);
+        const aimX = cx + (frac > 0 ? (frac / 2) * frameWorldWidth : 0);
+
+        return {
+            pos: new THREE.Vector3(aimX, cy, dist),
+            look: new THREE.Vector3(aimX, cy, 0),
+            dist
+        };
+    }
+
     fitCameraToVisible(instant = false) {
+        if (!this.shouldAutoFrame()) return;
+        // Fixed-frame mode: don't chase individual clusters. Instead ease out to the
+        // region the build has reached so far, which only ever grows.
+        if (this.fixedFrame) { this.fitCameraToLayoutBounds(); return; }
         if (!this.events || this.events.length === 0) return;
 
         const visible = new Set();
@@ -745,17 +1018,29 @@ class VGGTHierarchyApp {
         if (isFinalEvent && visible.size === 1) {
             for (const cluster of visible) {
                 if (!cluster.pointCloud || !cluster.pointCloud.geometry) continue;
-                const geom = cluster.pointCloud.geometry;
-                geom.computeBoundingBox();
-                const box = geom.boundingBox;
                 const s = cluster.fitScale || 1;
                 const hp = cluster.hierarchyPosition;
-                if (!hp || !box) continue;
-                minX = Math.min(minX, hp.x + box.min.x * s);
-                maxX = Math.max(maxX, hp.x + box.max.x * s);
-                minY = Math.min(minY, hp.y + box.min.y * s);
-                maxY = Math.max(maxY, hp.y + box.max.y * s);
-                found = true;
+                if (!hp) continue;
+                // Near-full envelope so the WHOLE assembled model stays in frame
+                // (user: see all the points); matches collapseToFinalView framing.
+                const ext = this.computeRobustExtent(cluster, s, VGGTHierarchyApp.FINAL_PCTS);
+                if (ext) {
+                    minX = Math.min(minX, hp.x + ext.cx - ext.halfW);
+                    maxX = Math.max(maxX, hp.x + ext.cx + ext.halfW);
+                    minY = Math.min(minY, hp.y + ext.cy - ext.halfH);
+                    maxY = Math.max(maxY, hp.y + ext.cy + ext.halfH);
+                    found = true;
+                } else {
+                    const geom = cluster.pointCloud.geometry;
+                    geom.computeBoundingBox();
+                    const box = geom.boundingBox;
+                    if (!box) continue;
+                    minX = Math.min(minX, hp.x + box.min.x * s);
+                    maxX = Math.max(maxX, hp.x + box.max.x * s);
+                    minY = Math.min(minY, hp.y + box.min.y * s);
+                    maxY = Math.max(maxY, hp.y + box.max.y * s);
+                    found = true;
+                }
             }
         } else {
             for (const cluster of visible) {
@@ -777,19 +1062,13 @@ class VGGTHierarchyApp {
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
 
-        const fov = this.camera.fov;
-        const aspect = window.innerWidth / window.innerHeight;
-        const vFovRad = THREE.MathUtils.degToRad(fov / 2);
-        const hFovRad = Math.atan(aspect * Math.tan(vFovRad));
-
-        const distForHeight = (height / 2) / Math.tan(vFovRad);
-        const distForWidth = (width / 2) / Math.tan(hFovRad);
-        const margin = isFinalEvent ? 1.15 : 1.05;
-        let dist = Math.max(distForHeight, distForWidth) * margin;
-        dist = Math.max(dist, 8);
-
-        const targetPos = new THREE.Vector3(centerX, centerY, dist);
-        const targetLookAt = new THREE.Vector3(centerX, centerY, 0);
+        // Tighter framing so the visible clusters fill the frame at every step
+        // (user wanted clusters to take up more space as they are placed). Panel-aware
+        // so nothing hides behind the Visual Settings panel.
+        const margin = isFinalEvent ? VGGTHierarchyApp.FINAL_MARGIN : 1.02;
+        const framing = this.computePanelFraming(centerX, centerY, width, height, margin);
+        const targetPos = framing.pos;
+        const targetLookAt = framing.look;
 
         if (instant) {
             this.camera.position.copy(targetPos);
@@ -809,6 +1088,7 @@ class VGGTHierarchyApp {
     }
 
     fitCameraToAllLeaves(instant = false) {
+        if (!this.shouldAutoFrame()) return;
         const leafClusters = this.animationEngine.getLeafClusters();
         if (leafClusters.length === 0) return;
 
@@ -830,18 +1110,9 @@ class VGGTHierarchyApp {
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
 
-        const fov = this.camera.fov;
-        const aspect = window.innerWidth / window.innerHeight;
-        const vFovRad = THREE.MathUtils.degToRad(fov / 2);
-        const hFovRad = Math.atan(aspect * Math.tan(vFovRad));
-
-        const distForHeight = (height / 2) / Math.tan(vFovRad);
-        const distForWidth = (width / 2) / Math.tan(hFovRad);
-        let dist = Math.max(distForHeight, distForWidth) * 1.15;
-        dist = Math.max(dist, 8);
-
-        const targetPos = new THREE.Vector3(centerX, centerY, dist);
-        const targetLookAt = new THREE.Vector3(centerX, centerY, 0);
+        const framing = this.computePanelFraming(centerX, centerY, width, height, 1.05);
+        const targetPos = framing.pos;
+        const targetLookAt = framing.look;
 
         if (instant) {
             this.camera.position.copy(targetPos);
@@ -854,6 +1125,152 @@ class VGGTHierarchyApp {
 
         this.cameraAnimTarget = targetPos;
         this.cameraAnimLookAt = targetLookAt;
+        this.cameraAnimDuration = 0.6;
+        this.cameraAnimStart = performance.now() / 1000;
+        this.cameraAnimFrom = this.camera.position.clone();
+        this.cameraAnimLookFrom = this.orbitControls.target.clone();
+    }
+
+    /**
+     * Frame the ENTIRE final floorplan once and hold it (fixed-frame mode). The
+     * layout bounds already span every cluster's final cell, so holding this frame
+     * means clusters simply appear in place and merges fuse adjacent cells with no
+     * camera motion - the area-universal / slicing-floorplan behavior we're trying.
+     */
+    /**
+     * Union of every cluster's ACTUAL world-space XY extent (its group position plus
+     * its fitScale-scaled point bounding box). We frame to this rather than the tile
+     * rectangles, because tiles are only filled to FIT_FRAC (82%) - a cluster's
+     * sparse tail extends past its tile, and an edge cluster's tail would otherwise
+     * clip at the frame edge. Framing the real content guarantees every cluster (and
+     * its points) stays fully on screen.
+     */
+    computeLayoutContentBounds() {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const c of this.dataLoader.clusters.values()) {
+            const g = c.pointCloud && c.pointCloud.geometry;
+            if (!g || !c.hierarchyPosition) continue;
+            // Per-cluster robust extent (drops each cluster's sparse flier tail) so one
+            // stray point can't force a big zoom-out that shrinks every dense cluster.
+            // Brussels had a cluster whose fliers reached x=-1005 while its dense mass
+            // ended near -409; trimming keeps framing hugged to what you can actually see.
+            const ext = this.computeRobustExtent(c, c.fitScale || 1);
+            if (!ext) continue;
+            const px = c.hierarchyPosition.x, py = c.hierarchyPosition.y;
+            minX = Math.min(minX, px + ext.cx - ext.halfW);
+            maxX = Math.max(maxX, px + ext.cx + ext.halfW);
+            minY = Math.min(minY, py + ext.cy - ext.halfH);
+            maxY = Math.max(maxY, py + ext.cy + ext.halfH);
+        }
+        if (minX === Infinity) return null;
+        return { minX, maxX, minY, maxY };
+    }
+
+    /**
+     * Smallest fraction of the full layout the progressive frame will ever show, so
+     * the first cluster or two don't fill the screen at an absurd zoom and the
+     * subsequent zoom-out stays gradual.
+     */
+    static PROGRESSIVE_MIN_FRAC = 0.4;
+
+    /**
+     * Union of the tiles of every cluster that has arrived by the current event,
+     * merged into a frame that only ever GROWS. Framing this instead of the full
+     * layout keeps arrived clusters filling the screen (rather than sitting in one
+     * corner of a rectangle reserved for all 40), while the monotonic growth means
+     * the camera only ever eases outward - it never snaps back and forth as the
+     * active region moves, which is what made the per-event framing feel unstable.
+     */
+    updateProgressiveBounds() {
+        const full = (this.layoutEngine && this.layoutEngine.bounds) || this.computeLayoutContentBounds();
+        if (!full || !this.events || !this.events.length) return full;
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        const add = (cluster) => {
+            if (!cluster || !cluster.hierarchyPosition) return;
+            // Its tile (merged nodes carry a mergeRegion instead of a leaf tile)...
+            const r = cluster.rect || cluster.mergeRegion;
+            if (r) {
+                minX = Math.min(minX, r.x); maxX = Math.max(maxX, r.x + r.w);
+                minY = Math.min(minY, r.y); maxY = Math.max(maxY, r.y + r.h);
+            }
+            // ...and its real point extent, since tiles are only filled to FIT_FRAC and
+            // a cluster's outer points reach past its tile edge.
+            const ext = this.computeRobustExtent(cluster, cluster.fitScale || 1);
+            if (ext) {
+                const px = cluster.hierarchyPosition.x, py = cluster.hierarchyPosition.y;
+                minX = Math.min(minX, px + ext.cx - ext.halfW);
+                maxX = Math.max(maxX, px + ext.cx + ext.halfW);
+                minY = Math.min(minY, py + ext.cy - ext.halfH);
+                maxY = Math.max(maxY, py + ext.cy + ext.halfH);
+            }
+        };
+        const upto = Math.min(this.currentEventIndex, this.events.length - 1);
+        for (let i = 0; i <= upto; i++) {
+            const evt = this.events[i];
+            if (!evt) continue;
+            add(evt.cluster);
+            if (!evt.isLeaf && evt.children) {
+                for (const p of evt.children) add(this.dataLoader.clusters.get(p));
+            }
+        }
+        if (minX === Infinity) return full;
+
+        // Never show less than PROGRESSIVE_MIN_FRAC of the layout, keeping the
+        // layout's aspect so the expansion reads as a straight zoom-out.
+        const fullW = full.maxX - full.minX, fullH = full.maxY - full.minY;
+        const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        const minW = fullW * VGGTHierarchyApp.PROGRESSIVE_MIN_FRAC;
+        const minH = fullH * VGGTHierarchyApp.PROGRESSIVE_MIN_FRAC;
+        let w = Math.max(maxX - minX, minW), h = Math.max(maxY - minY, minH);
+        let box = { minX: cx - w / 2, maxX: cx + w / 2, minY: cy - h / 2, maxY: cy + h / 2 };
+
+        // Monotonic: absorb whatever we have already shown so the frame only grows.
+        const prev = this.progressiveBounds;
+        if (prev) {
+            box = {
+                minX: Math.min(box.minX, prev.minX), maxX: Math.max(box.maxX, prev.maxX),
+                minY: Math.min(box.minY, prev.minY), maxY: Math.max(box.maxY, prev.maxY)
+            };
+        }
+        // Clamp to the full layout so we never frame empty space beyond it.
+        box = {
+            minX: Math.max(box.minX, full.minX), maxX: Math.min(box.maxX, full.maxX),
+            minY: Math.max(box.minY, full.minY), maxY: Math.min(box.maxY, full.maxY)
+        };
+        this.progressiveBounds = box;
+        return box;
+    }
+
+    fitCameraToLayoutBounds(instant = false) {
+        if (!this.shouldAutoFrame()) return;
+        // Frame the region the build has actually reached (see updateProgressiveBounds).
+        // The frame is stable in the sense that matters - it never chases individual
+        // clusters and never zooms back in - but it does expand as new branches of the
+        // tree activate, so early frames are filled instead of showing 11 clusters in
+        // the corner of a rectangle sized for all 40. By the final event the region has
+        // grown to the whole layout, so the assembled model is framed exactly as before.
+        const b = this.updateProgressiveBounds();
+        if (!b) return;
+
+        const pad = 2;
+        const width = (b.maxX - b.minX) + pad;
+        const height = (b.maxY - b.minY) + pad;
+        const centerX = (b.minX + b.maxX) / 2;
+        const centerY = (b.minY + b.maxY) / 2;
+
+        // Comfortable margin so clusters never touch the frame edge.
+        const framing = this.computePanelFraming(centerX, centerY, width, height, 1.08);
+        if (instant) {
+            this.camera.position.copy(framing.pos);
+            this.camera.lookAt(framing.look);
+            this.orbitControls.target.copy(framing.look);
+            this.orbitControls.update();
+            this.cameraAnimTarget = null;
+            return;
+        }
+        this.cameraAnimTarget = framing.pos;
+        this.cameraAnimLookAt = framing.look;
         this.cameraAnimDuration = 0.6;
         this.cameraAnimStart = performance.now() / 1000;
         this.cameraAnimFrom = this.camera.position.clone();
@@ -894,6 +1311,51 @@ class VGGTHierarchyApp {
         this.updateUI();
     }
 
+    /**
+     * Robust screen-plane (XY) extent of a cluster's cloud using percentiles, so the
+     * diffuse halo of stray outlier points does NOT inflate the box (which was making
+     * the camera zoom out and the dense building read small at the final view). Y uses
+     * a looser top percentile so the iconic tower/spire tip is not cropped. Returns
+     * center + half-width/height already multiplied by `scale`.
+     */
+    computeRobustExtent(cluster, scale = 1.0, pcts = null) {
+        const geom = cluster.pointCloud && cluster.pointCloud.geometry;
+        if (!geom || !geom.attributes.position) return null;
+        const pos = geom.attributes.position;
+        const n = pos.count;
+        if (n === 0) return null;
+
+        const maxSamples = 40000;
+        const stepN = Math.max(1, Math.floor(n / maxSamples));
+        const xs = [], ys = [];
+        for (let i = 0; i < n; i += stepN) {
+            xs.push(pos.getX(i));
+            ys.push(pos.getY(i));
+        }
+        xs.sort((a, b) => a - b);
+        ys.sort((a, b) => a - b);
+        const q = (arr, p) => arr[Math.min(arr.length - 1, Math.max(0, Math.round(p * (arr.length - 1))))];
+        // Percentile trims are parameterizable. Default trims the diffuse ~2% halo on
+        // X and bottom Y (keeps the tall tower). The final view passes a near-full
+        // envelope so EVERY point stays on screen (user: "see all the points").
+        const p = pcts || { xlo: 0.02, xhi: 0.98, ylo: 0.02, yhi: 0.995 };
+        const xlo = q(xs, p.xlo), xhi = q(xs, p.xhi);
+        const ylo = q(ys, p.ylo), yhi = q(ys, p.yhi);
+        return {
+            cx: ((xlo + xhi) / 2) * scale,
+            cy: ((ylo + yhi) / 2) * scale,
+            halfW: Math.max(((xhi - xlo) / 2) * scale, 1e-3),
+            halfH: Math.max(((yhi - ylo) / 2) * scale, 1e-3)
+        };
+    }
+
+    // Near-full envelope for the FINAL assembled view: keep 99.9% of points on each
+    // tail (drops only the most extreme stray fliers so one bad point can't shrink
+    // the model), so the whole reconstruction - spire tip to base - stays in frame.
+    static FINAL_PCTS = { xlo: 0.001, xhi: 0.999, ylo: 0.001, yhi: 0.999 };
+    // Comfortable air around the final model so nothing touches the frame edge.
+    static FINAL_MARGIN = 1.08;
+
     collapseToFinalView() {
         if (this.finalViewActive) return;
 
@@ -912,40 +1374,44 @@ class VGGTHierarchyApp {
         const box = geom.boundingBox;
         if (!box) return;
 
+        // Near-full envelope at final world scale (1.0): keep 99.9% of points on each
+        // tail so the ENTIRE assembled model - spire tip to base - stays on screen
+        // (user: "see all the points and the full visualization"), while a couple of
+        // extreme stray fliers can't shrink the model. Center that envelope at the
+        // origin by offsetting the end position, then frame it with comfortable air.
+        const ext = this.computeRobustExtent(cluster, 1.0, VGGTHierarchyApp.FINAL_PCTS)
+            || { cx: 0, cy: 0, halfW: (box.max.x - box.min.x) / 2, halfH: (box.max.y - box.min.y) / 2 };
+
         const s = this.finalViewOrigScale;
-        const hp = cluster.hierarchyPosition;
-        const cx = hp.x + ((box.min.x + box.max.x) / 2) * s;
-        const cy = hp.y + ((box.min.y + box.max.y) / 2) * s;
 
         this.finalViewAnim = {
             startTime: performance.now() / 1000,
             duration: 1.5,
             startPos: cluster.group.position.clone(),
-            endPos: new THREE.Vector3(0, 0, 0),
+            endPos: new THREE.Vector3(-ext.cx, -ext.cy, 0),
             startScale: s,
             endScale: 1.0,
             cluster
         };
 
-        const halfW = (box.max.x - box.min.x) / 2;
-        const halfH = (box.max.y - box.min.y) / 2;
-        const fov = this.camera.fov;
-        const aspect = window.innerWidth / window.innerHeight;
-        const vFovRad = THREE.MathUtils.degToRad(fov / 2);
-        const hFovRad = Math.atan(aspect * Math.tan(vFovRad));
-        const distForHeight = halfH / Math.tan(vFovRad);
-        const distForWidth = halfW / Math.tan(hFovRad);
-        let dist = Math.max(distForHeight, distForWidth) * 1.2;
-        dist = Math.max(dist, 8);
+        // Tight final framing so the assembled model fills the screen (user wanted
+        // the final reconstruction to read large). The cluster was offset by
+        // (-ext.cx, -ext.cy) above so its robust center is at the origin; frame that
+        // box, panel-aware so the model isn't hidden behind the Visual Settings panel.
+        // Only snap the camera if the user hasn't taken manual control (respect-manual):
+        // the geometry above always assembles, but we leave their view alone if they moved.
+        if (this.shouldAutoFrame()) {
+            const framing = this.computePanelFraming(0, 0, ext.halfW * 2, ext.halfH * 2, VGGTHierarchyApp.FINAL_MARGIN);
+            this.cameraAnimTarget = framing.pos;
+            this.cameraAnimLookAt = framing.look;
+            this.cameraAnimDuration = 1.5;
+            this.cameraAnimStart = performance.now() / 1000;
+            this.cameraAnimFrom = this.camera.position.clone();
+            this.cameraAnimLookFrom = this.orbitControls.target.clone();
+        }
 
-        this.cameraAnimTarget = new THREE.Vector3(0, 0, dist);
-        this.cameraAnimLookAt = new THREE.Vector3(0, 0, 0);
-        this.cameraAnimDuration = 1.5;
-        this.cameraAnimStart = performance.now() / 1000;
-        this.cameraAnimFrom = this.camera.position.clone();
-        this.cameraAnimLookFrom = this.orbitControls.target.clone();
-
-        this.ui.eventLabel.textContent = 'Assembled Reconstruction — Gerrard Hall';
+        const sceneName = (DATASETS[this.datasetKey] && DATASETS[this.datasetKey].sceneName) || 'the reconstruction';
+        this.ui.eventLabel.textContent = `Assembled Reconstruction — ${sceneName}`;
         this.updateAnnotation();
     }
 
@@ -962,10 +1428,118 @@ class VGGTHierarchyApp {
     reset() {
         this.isPlaying = false;
         this.ui.playBtn.textContent = 'Play';
+        // Resume auto-framing: Reset is the explicit "give the cinematic camera back"
+        // action after the user has been driving manually.
+        this.userCameraOverride = false;
         this.undoFinalView();
         this.animationEngine.hideTransitionClouds();
         this.animationEngine.activeAnimations = [];
+        // Let the progressive frame shrink back to the opening region; it is otherwise
+        // monotonic, so without this a replay would start already zoomed all the way out.
+        this.progressiveBounds = null;
         this.jumpTo(0);
+    }
+
+    /**
+     * Coalesce rapid slider input into at most one re-layout per frame so dragging
+     * the Cluster Gap / Fill sliders stays smooth.
+     */
+    scheduleRelayout() {
+        if (this._relayoutQueued) return;
+        this._relayoutQueued = true;
+        requestAnimationFrame(() => {
+            this._relayoutQueued = false;
+            this.recomputeLayout();
+        });
+    }
+
+    /**
+     * Recompute the treemap with the current PADDING_FRAC / FIT_FRAC and re-apply the
+     * current event state so new tile spacing takes effect live. Only the group
+     * transforms change (no geometry rebuild). Skipped while collapsed to the single
+     * final model, where tiling is irrelevant.
+     */
+    recomputeLayout() {
+        if (!this.layoutEngine || !this.events || !this.events.length) return;
+        if (this.finalViewActive) return;
+        // buildTree() appends to treeNodes, so clear it before recomputing to avoid
+        // accumulating duplicate nodes across runs.
+        this.layoutEngine.treeNodes = [];
+        this.layoutEngine.computeLayout();
+        this.jumpTo(this.currentEventIndex);
+    }
+
+    _clampSpeedX(x) {
+        return Math.min(this.MAX_SPEEDX, Math.max(this.MIN_SPEEDX, x || 1));
+    }
+
+    // Log map between the 0..1 slider position and speedX in [MIN_SPEEDX, MAX_SPEEDX].
+    _posToSpeedX(pos) {
+        const p = Math.min(1, Math.max(0, pos));
+        return this._clampSpeedX(this.MIN_SPEEDX * Math.pow(this.MAX_SPEEDX / this.MIN_SPEEDX, p));
+    }
+    _speedXToPos(x) {
+        const sx = this._clampSpeedX(x);
+        return Math.log(sx / this.MIN_SPEEDX) / Math.log(this.MAX_SPEEDX / this.MIN_SPEEDX);
+    }
+
+    // Apply a new "x real-time" speed. This sets the pause divisor used by the play
+    // loop and nothing else: the per-cluster materialization keeps its base timing at
+    // every speed. Scaling the animation with the speed (as an earlier version did)
+    // made clusters snap in ~10x faster than designed at the default speed, which read
+    // as jittery and disconnected from the rest of the visualization.
+    applyTimelineSpeed(sx) {
+        this.speedX = this._clampSpeedX(sx);
+        if (this.animationEngine) {
+            this.animationEngine.setSpeed(1);
+        }
+        // Keep the slider thumb in sync (e.g. after the auto-pick on load, or when a
+        // different dataset picks a different default).
+        const slider = document.getElementById('slider-timeline-speed');
+        if (slider) slider.value = this._speedXToPos(this.speedX);
+        this.updateSpeedReadout();
+    }
+
+    // Update the "≈ 180× real-time · ~45s" label beside the speed slider.
+    updateSpeedReadout() {
+        const el = document.getElementById('val-timeline-speed');
+        if (!el) return;
+        const sx = this.speedX || 1;
+        const vizDur = this._estimatePlaybackSec(sx);
+        // Each event takes max(animation, gap/speedX), so once the requested speed
+        // compresses gaps below the animation duration the animation floor governs and
+        // the build cannot actually run at sx. Report the rate the viewer will really
+        // see rather than the number the slider asked for.
+        const effective = vizDur > 0 ? (this.realSpanSec || 0) / vizDur : sx;
+        const shown = Math.min(sx, Math.max(1, effective));
+        const factor = shown <= 1.001 ? '1\u00d7 (real-time)' : `\u2248 ${this._fmtMult(shown)} real-time`;
+        el.textContent = `${factor} \u00b7 ~${this._fmtDur(vizDur)}`;
+    }
+
+    // Wall-clock length of a full play-through at speed `sx`, honoring the fact that
+    // an event can never be shorter than its materialization animation.
+    _estimatePlaybackSec(sx) {
+        const animDur = this.animationEngine?.baseMergeDuration || 0.8;
+        const events = this.events || [];
+        if (!events.length) return 0;
+        let total = 0;
+        for (const e of events) {
+            const gap = typeof e.realGapSec === 'number' ? e.realGapSec / sx : 0;
+            total += Math.max(animDur, gap);
+        }
+        return total;
+    }
+
+    _fmtMult(x) {
+        if (x >= 100) return Math.round(x / 10) * 10 + '\u00d7';
+        if (x >= 10) return Math.round(x) + '\u00d7';
+        return x.toFixed(1) + '\u00d7';
+    }
+
+    _fmtDur(sec) {
+        if (sec >= 3600) return (sec / 3600).toFixed(1) + 'h';
+        if (sec >= 90) return Math.round(sec / 60) + 'm';
+        return Math.round(sec) + 's';
     }
 
     togglePlay() {
@@ -1037,7 +1611,8 @@ class VGGTHierarchyApp {
         if (this.finalViewActive) {
             step = 'Final Result';
             title = 'Assembled 3D Reconstruction';
-            desc = `All ${leafCount} VGGT clusters merged through ${mergeCount} hierarchical merge operations into a complete 3D model of Gerrard Hall.`;
+            const sceneName = (DATASETS[this.datasetKey] && DATASETS[this.datasetKey].sceneName) || 'the reconstruction';
+            desc = `All ${leafCount} VGGT clusters merged through ${mergeCount} hierarchical merge operations into a complete 3D model of ${sceneName}.`;
         } else if (evt.isLeaf) {
             step = `VGGT Reconstruction ${leafsSoFar} of ${leafCount}`;
             title = `Cluster: ${evt.path.split('/').pop()}`;
@@ -1100,6 +1675,24 @@ class VGGTHierarchyApp {
         }
         this.ui.stats.textContent = `Clusters: ${visibleClusters} | Points: ${visiblePoints.toLocaleString()}`;
 
+        // Kathir-style monospace HUD (run / stage / cameras / points).
+        const hudRun = document.getElementById('hud-run');
+        if (hudRun) {
+            let visibleCameras = 0;
+            if (this.frustumEngine) {
+                for (const g of this.frustumEngine.frustumGroups.values()) {
+                    if (g.visible) visibleCameras += (g.userData.cameraCount || 0);
+                }
+            }
+            hudRun.textContent = (DATASETS[this.datasetKey] && DATASETS[this.datasetKey].label) || this.datasetKey;
+            const stageEl = document.getElementById('hud-stage');
+            if (stageEl) stageEl.textContent = `${this.currentEventIndex + 1} / ${this.events.length}`;
+            const camEl = document.getElementById('hud-cameras');
+            if (camEl) camEl.textContent = visibleCameras.toLocaleString();
+            const ptEl = document.getElementById('hud-points');
+            if (ptEl) ptEl.textContent = visiblePoints.toLocaleString();
+        }
+
         const cameraSelect = document.getElementById('camera-mode-select');
         if (cameraSelect) {
             const isFinal = this.currentEventIndex === this.events.length - 1;
@@ -1138,6 +1731,8 @@ class VGGTHierarchyApp {
         const time = performance.now() / 1000;
         const dt = 0.016;
 
+        if (this.flowMode) updateFlowTime(time);
+
         if (this.isPlaying) {
             if (!this.lastStepTime) this.lastStepTime = time;
             const hasActiveAnims = this.animationEngine && this.animationEngine.activeAnimations.length > 0;
@@ -1147,10 +1742,27 @@ class VGGTHierarchyApp {
                 this.hadActiveAnims = false;
                 this.lastAnimEndTime = time;
             }
-            const ref = Math.max(this.lastStepTime, this.lastAnimEndTime || 0);
+            // Time the gap from when the event was triggered, not from when its
+            // animation settled, so a cluster's materialization plays *inside* its
+            // real-time gap instead of being added on top of it. Combined with the
+            // hasActiveAnims guard below, an event lands at
+            // max(animation duration, real gap / speedX): the animation keeps its
+            // full base duration, and real timing governs everything longer.
+            const ref = this.lastStepTime;
             const nextIdx = this.currentEventIndex + 1;
             const nextEvent = nextIdx < this.events.length ? this.events[nextIdx] : null;
-            const delay = nextEvent && nextEvent.delay ? nextEvent.delay : 0.12;
+            // Pace by the REAL gap before the next event, in "x real-time": the
+            // pause is the real seconds divided by speedX. At speedX=1 this is
+            // literally real-time; higher speedX compresses it. Long compute pauses
+            // read as pauses; bursts fire back-to-back. Falls back to the legacy
+            // per-event delay when a dataset has no timestamps.
+            const sx = this.speedX || 1;
+            let delay;
+            if (nextEvent && typeof nextEvent.realGapSec === 'number') {
+                delay = nextEvent.realGapSec / sx;
+            } else {
+                delay = (nextEvent && nextEvent.delay ? nextEvent.delay : 0.12);
+            }
             if (!hasActiveAnims && time - ref > delay) {
                 if (this.currentEventIndex < this.events.length - 1) {
                     this.step(1);

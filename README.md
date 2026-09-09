@@ -46,6 +46,34 @@ python3 colorize_points.py --images <photo_dir> --recursive data/gerrard-hall-vg
 
 The script samples each 3D point's track observations from the photos (the same way COLMAP assigns point colors) and rewrites `points3D.txt` in place (backup kept as `.bak`). The app needs no changes afterwards - it uses real colors automatically when they exist.
 
+## Adding the fine optimization-points dataset
+
+Kathir's reconstructions (see [examples](https://kathirgounder.github.io/project.html?id=reconstructions)) use the **dense fine points straight from the GTSFM optimization**, not the sparse sampled points currently in the Brussels exports. GTSFM writes COLMAP `points3D.txt`, so the loader ingests them with no format changes. To add one:
+
+1. Drop the reconstruction under `data/<scene>/` with the standard layout:
+   - `<node>/points3D.txt` per cluster node (COLMAP: `id x y z r g b error track…`)
+   - `merged/images.txt` (camera extrinsics — used to orient the scene upright)
+   - optional `timestamps.json` (per-node timestamps drive the timeline pacing)
+2. Generate the manifest: `python3 generate_structure.py data/<scene>`
+3. Register it in `DATASETS` (`js/data-loader-vggt.js`). Dense clouds should set a
+   small `pointScale` so the fine detail isn't buried under fat points:
+
+   ```js
+   BRUSSELS_FINE: { label: 'Brussels (fine)', basePath: 'data/brussels-fine', useManifest: true, pointScale: 0.4 }
+   ```
+
+### Point size for fine vs sampled clouds
+
+`pointScale` (per dataset) multiplies every point's on-screen size. Sparse "sampled"
+clouds read best as surfaces at `1.0`; dense "fine" clouds want `~0.3–0.5` so
+individual points stay crisp. Tune it live without editing code:
+
+- URL override: `hierarchy-vggt.html?dataset=…&psize=0.4`
+- Console: `setPointSizeScale(0.4)` (re-applies immediately)
+
+Fine points from the optimization typically carry **real RGB**, which also resolves
+the colorless `0 0 0` fallback the current Brussels exports trigger.
+
 ## Regenerating dataset manifests
 
 When new reconstruction folders are added, regenerate the `structure.json` manifests the loader consumes:
@@ -54,6 +82,39 @@ When new reconstruction folders are added, regenerate the `structure.json` manif
 python3 generate_structure.py data/gerrard-hall-vggt-v2/C_1        # single branch
 python3 generate_structure.py --exclude C_4 data/gerrard-hall-vggt-v2  # combined root over C_1+C_2+C_3
 ```
+
+## Brussels colored export (current data)
+
+`data/gerrard-hall-vggt-v2` (the `BRUSSELS` / `C_1` / `C_2` / `C_3` datasets) holds Kathir's
+colored Brussels export: every node's `points3D.txt` carries real per-point RGB, so the
+loader uses it directly and the grayscale `applyFallbackColors()` ramp no longer triggers.
+`C_4` is a separate reconstruction not included in that export and is preserved as-is.
+To refresh with a newer export, replace the per-node `points3D.txt` / `images.txt` /
+`cameras.txt` and rerun `generate_structure.py` (see above).
+
+Data files are fetched with `cache: 'no-cache'` (in `js/data-loader-vggt.js` and
+`js/frustum-engine.js`) so an updated export is never masked by a stale browser-cached
+copy; a normal reload always revalidates and picks up new colors/points.
+
+### Timestamps (real arrival order)
+
+`data/gerrard-hall-vggt-v2/timestamps.json` now carries the **real pipeline arrival order**
+Kathir sent (`cluster_arrival_order.csv`). Each cluster path maps to `{ "epoch": <unix>,
+"arrival_rank": <n> }`: `cluster_reconstruction` rows → `<node>/vggt`, `merge` rows →
+`<node>/merged`, and the root `merge, root` → `merged`. `initTimeline()` in
+`js/animation-engine-squareness.js` sorts by `epoch`, so the viewer plays in true wall-clock
+order and shows the real reconstruction time per event.
+
+Raw arrival order is **not** always a valid bottom-up merge order: the run occasionally logs a
+parent merge a few seconds before its child merge, which would leave orphan child clusters
+visible at the end. When regenerating `timestamps.json`, a post-order pass bumps each parent's
+epoch to `max(own, max(child)+1ms)` so every parent is strictly after all descendants while
+otherwise preserving real times. Regenerate from the CSV if the run changes.
+
+### Removed dataset
+
+The `C_4` "community photo collection" tab was removed: per Kathir, Dubrovnik was never
+reconstructed successfully, so it should not be shown.
 
 ## Architecture
 
