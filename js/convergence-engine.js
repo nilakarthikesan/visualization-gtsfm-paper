@@ -1,4 +1,3 @@
-const SCATTER_RADIUS_MULT = 3.0;
 const CONVERGE_DURATION = 0.8;
 const PER_POINT_DELAY_FRAC = 0.3;
 
@@ -22,17 +21,21 @@ export class ConvergenceEngine {
         }
 
         const scatteredPositions = new Float32Array(count * 3);
-        const scatterRadius = (cluster.radius || 10) * SCATTER_RADIUS_MULT;
+        // Reveal from a compact copy about the footprint center. Both endpoints
+        // are inside the fitted box, so every interpolated point stays in its tile.
+        // The fallback is for older viewers that do not use the rectangle layout.
+        const box = cluster.revealBox;
+        const center = box ? {
+            x: (box.min.x + box.max.x) / 2,
+            y: (box.min.y + box.max.y) / 2,
+            z: (box.min.z + box.max.z) / 2
+        } : { x: 0, y: 0, z: 0 };
 
         for (let j = 0; j < count; j++) {
             const j3 = j * 3;
-            const theta = Math.random() * Math.PI * 2;
-            const phi = Math.acos(2 * Math.random() - 1);
-            const dist = scatterRadius * (0.5 + Math.random() * 0.5);
-
-            scatteredPositions[j3]     = finalPositions[j3]     + dist * Math.sin(phi) * Math.cos(theta);
-            scatteredPositions[j3 + 1] = finalPositions[j3 + 1] + dist * Math.sin(phi) * Math.sin(theta);
-            scatteredPositions[j3 + 2] = finalPositions[j3 + 2] + dist * Math.cos(phi);
+            scatteredPositions[j3]     = center.x + (finalPositions[j3] - center.x) * 0.2;
+            scatteredPositions[j3 + 1] = center.y + (finalPositions[j3 + 1] - center.y) * 0.2;
+            scatteredPositions[j3 + 2] = center.z + (finalPositions[j3 + 2] - center.z) * 0.2;
         }
 
         const perPointDelay = new Float32Array(count);

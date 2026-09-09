@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { bindRegionClip } from './region-clipping.js?v=1';
 
 export class FrustumEngine {
     constructor(worldGroup) {
@@ -150,6 +151,7 @@ export class FrustumEngine {
      * be changed live (rebuildAllFrustums) without reloading camera data.
      */
     buildFrustumGeometry(cameras, clusterRadius) {
+        if (this.frustumRelativeSize === 0) return null;
         const frustumLength = clusterRadius * this.frustumRelativeSize;
         const halfH = Math.tan(THREE.MathUtils.degToRad(this.frustumFovY / 2)) * frustumLength;
         const halfW = halfH * this.frustumAspect;
@@ -200,8 +202,11 @@ export class FrustumEngine {
 
         const cluster = this.clusters.get(clusterPath);
         const clusterRadius = cluster ? cluster.radius : 1;
+        // Attach even when size is zero, so increasing it later reveals the lines.
+        (cluster?.group || this.worldGroup).add(group);
 
         const geom = this.buildFrustumGeometry(cameras, clusterRadius);
+        if (cluster) cluster.frustumGeometry = geom;
         if (!geom) return group;
 
         const mat = new THREE.LineBasicMaterial({
@@ -212,19 +217,9 @@ export class FrustumEngine {
         });
 
         const lines = new THREE.LineSegments(geom, mat);
+        bindRegionClip(lines, () => cluster?.rect);
         group.add(lines);
 
-        // Parent the frustum group to its cluster's group (identity local
-        // transform) so it inherits the exact same position/scale as the point
-        // cloud and follows every layout and final-view animation. Previously it
-        // lived in worldGroup at a static hierarchyPosition snapshot, which made
-        // the cameras drift away when clusters moved (e.g. the final collapse to
-        // origin). Fall back to worldGroup only if the cluster has no group.
-        if (cluster && cluster.group) {
-            cluster.group.add(group);
-        } else {
-            this.worldGroup.add(group);
-        }
         return group;
     }
 
@@ -278,6 +273,7 @@ export class FrustumEngine {
             const prevVisible = group.visible;
 
             const geom = this.buildFrustumGeometry(cameras, clusterRadius);
+            if (cluster) cluster.frustumGeometry = geom;
             // Remove old line segments.
             if (old) {
                 group.remove(old);
@@ -293,9 +289,11 @@ export class FrustumEngine {
                 depthWrite: false
             });
             const lines = new THREE.LineSegments(geom, mat);
+            bindRegionClip(lines, () => cluster?.rect);
             group.add(lines);
             group.visible = prevVisible;
         }
+        this.onGeometryChanged?.();
     }
 
     getFrustumSize() {

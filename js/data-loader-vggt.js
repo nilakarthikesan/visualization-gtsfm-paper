@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createPointMaterial } from './point-material.js?v=45';
+import { createPointMaterial } from './point-material.js?v=47';
 
 // pointScale: per-dataset base size multiplier. The v2 Brussels/C_* clouds are
 // dense fine optimizations, so they read best with small points (~0.4) that

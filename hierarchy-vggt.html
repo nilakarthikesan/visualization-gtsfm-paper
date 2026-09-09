@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerrard Hall - VGGT Squareness Layout</title>
+    <title>VGGT Reconstruction and Merging</title>
     <style>
         * {
             margin: 0;
@@ -454,7 +454,7 @@
             pointer-events: none;
             position: fixed;
             left: 20px;
-            bottom: 180px;
+            bottom: 30px;
             max-width: 340px;
             z-index: 40;
             opacity: 0;
@@ -619,9 +619,9 @@
         <div id="ui-layer">
             <div class="top-bar">
                 <div class="title-block" id="title-block" onclick="this.classList.toggle('collapsed')">
-                    <h1>VGGT Squareness Layout <span class="toggle-icon">&#9660;</span></h1>
+                    <h1>VGGT Reconstruction and Merging <span class="toggle-icon">&#9660;</span></h1>
                     <div class="title-details">
-                        <div class="subtitle">Recursive rectangle subdivision with squareness-optimized cluster placement</div>
+                        <div class="subtitle">Reconstruct in reserved regions, then merge within one final frame</div>
                         <div class="pipeline-tag">VGGT PIPELINE</div>
                     </div>
                 </div>
@@ -716,7 +716,7 @@
                         <input type="checkbox" id="toggle-auto-frame" checked>
                     </div>
                     <div class="vs-row">
-                        <label for="toggle-lock-frame">Progressive Frame</label>
+                        <label for="toggle-lock-frame">Lock Final Frame</label>
                         <input type="checkbox" id="toggle-lock-frame" checked>
                     </div>
 
@@ -737,6 +737,10 @@
                     </div>
 
                     <div class="vs-section-label">Layout</div>
+                    <div class="vs-row">
+                        <label for="toggle-layout-guides">Show Reserved Regions</label>
+                        <input type="checkbox" id="toggle-layout-guides">
+                    </div>
                     <div class="vs-row">
                         <label for="slider-tile-gap">Cluster Gap</label>
                         <input type="range" id="slider-tile-gap" min="0" max="0.15" step="0.01" value="0.05">
@@ -813,6 +817,16 @@
         </div>
     </div>
 
+    <div id="layout-guides" aria-hidden="true" hidden></div>
+    <style>
+        #layout-guides { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+        .layout-region { position: absolute; box-sizing: border-box; border: 1px dashed #8294a480; }
+        .layout-region.arrived { border: 1px solid #347899a0; }
+        .layout-region.planned-parent { border-color: #8294a450; }
+        .layout-region span { position: absolute; top: 2px; left: 3px; max-width: calc(100% - 6px);
+            overflow: hidden; white-space: nowrap; font: 10px monospace; color: #24495e;
+            background: #ffffffdd; padding: 1px 3px; }
+    </style>
     <script type="importmap">
     {
         "imports": {
@@ -833,6 +847,6 @@
         };
     </script>
 
-    <script type="module" src="./js/main-hierarchy-vggt.js?v=82"></script>
+    <script type="module" src="./js/main-hierarchy-vggt.js?v=83"></script>
 </body>
 </html>
