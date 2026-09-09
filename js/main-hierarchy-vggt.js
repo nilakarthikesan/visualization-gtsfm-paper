@@ -5,15 +5,15 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=50';
-import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=48';
+import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=50';
 import { InteractionEngine } from './interaction-engine.js?v=6';
-import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=44';
+import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=45';
 import { CameraEngine } from './camera-engine.js?v=40';
 import { updatePointScale, applyBlendMode, BLEND_MODES, updateFlowTime, setFlowParams, setPointSizeScale } from './point-material.js?v=46';
 import { FrustumEngine } from './frustum-engine.js?v=38';
 import { EDLPass } from './edl-pass.js?v=40';
 import { ParticleEngine } from './particle-engine.js?v=40';
-import { ConvergenceEngine } from './convergence-engine.js?v=42';
+import { ConvergenceEngine } from './convergence-engine.js?v=43';
 
 const VignetteShader = {
     uniforms: {
@@ -101,6 +101,15 @@ class VGGTHierarchyApp {
         // the camera, so auto-framing cedes control until Reset (smart-suspend).
         this.autoFrameEnabled = localStorage.getItem('gh-auto-frame') !== 'false';
         this.userCameraOverride = false;
+        // Playback speed (Frank): the timeline is paced by the REAL seconds between
+        // pipeline events; this multiplier speeds up/slows down that replay. 1 = base.
+        this.timelineSpeed = parseFloat(localStorage.getItem('gh-timeline-speed')) || 1;
+        // Real seconds -> playback (viz) seconds mapping at 1x, and the cap on any
+        // single pause so a very long compute gap stays felt but bounded.
+        this.REAL_SEC_TO_VIZ = 0.012;   // 1x: ~100s of real compute -> ~1.2s pause
+        this.MAX_PAUSE_SEC = 3.5;       // 1x: no single pause longer than this
+        this.realSpanSec = 0;
+        this.pauseSum1x = 0;
         // Fixed-frame ("lock the whole build") camera: instead of the camera chasing
         // the growing visible set event-by-event, frame the ENTIRE final floorplan
         // once and hold it. This is the area-universal / slicing-floorplan behavior -
@@ -547,6 +556,21 @@ class VGGTHierarchyApp {
             });
         }
 
+        // Playback Speed (Frank): scales the real-timing replay. The readout shows
+        // the multiplier plus an approximate "x real-time" so visitors can feel how
+        // much faster than the actual computation they're watching.
+        const speedSlider = document.getElementById('slider-timeline-speed');
+        if (speedSlider) {
+            speedSlider.value = this.timelineSpeed;
+            speedSlider.addEventListener('input', (e) => {
+                const v = parseFloat(e.target.value);
+                this.timelineSpeed = v;
+                if (this.animationEngine) this.animationEngine.setSpeed(v);
+                localStorage.setItem('gh-timeline-speed', v);
+                this.updateSpeedReadout();
+            });
+        }
+
         if (vignetteToggle) {
             vignetteToggle.checked = this.vignetteEnabled;
             vignetteToggle.addEventListener('change', (e) => {
@@ -813,6 +837,21 @@ class VGGTHierarchyApp {
             this.animationEngine.initTransitionBuffers(this.blendMode, this.isDark);
             this.events = this.animationEngine.initTimeline();
             this.currentEventIndex = 0;
+
+            // Real-timing playback bookkeeping. realSpanSec = sum of the (artifact-
+            // capped) real seconds between events = the effective real duration we
+            // honor. pauseSum1x = total playback seconds spent in inter-event pauses
+            // at 1x. Together with the fixed materialization animations these let us
+            // show Frank an approximate "x real-time" factor next to the speed slider.
+            this.realSpanSec = 0;
+            this.pauseSum1x = 0;
+            for (const e of this.events) {
+                const gap = typeof e.realGapSec === 'number' ? e.realGapSec : 0;
+                this.realSpanSec += gap;
+                this.pauseSum1x += Math.min(gap * this.REAL_SEC_TO_VIZ, this.MAX_PAUSE_SEC);
+            }
+            this.animationEngine.setSpeed(this.timelineSpeed);
+            this.updateSpeedReadout();
 
             const leafClusters = this.animationEngine.getLeafClusters();
             this.convergenceEngine.prepareAllLeaves(leafClusters);
@@ -1123,9 +1162,14 @@ class VGGTHierarchyApp {
 
     fitCameraToLayoutBounds(instant = false) {
         if (!this.shouldAutoFrame()) return;
-        // Prefer the real content extent (keeps every cluster's points on screen);
-        // fall back to the tile bounds only if geometry isn't ready yet.
-        const b = this.computeLayoutContentBounds() || (this.layoutEngine && this.layoutEngine.bounds);
+        // Frame the FIXED layout rectangle (the union of every leaf tile). By
+        // construction this rect contains every cluster's tile, and the full-extent
+        // fit (robustXYExtent ~99.4% + FIT_FRAC) keeps each cluster's body inside its
+        // own tile - so framing this rect guarantees nothing is ever off-screen for
+        // the entire build. We deliberately do NOT frame the trimmed content bounds
+        // here (that shifts with whatever has arrived and can push edge clusters off
+        // frame); Lock Frame holds this one rect from load through the final model.
+        const b = (this.layoutEngine && this.layoutEngine.bounds) || this.computeLayoutContentBounds();
         if (!b) return;
 
         const pad = 2;
@@ -1341,6 +1385,27 @@ class VGGTHierarchyApp {
         this.jumpTo(this.currentEventIndex);
     }
 
+    // Update the "1.0x · ≈ 180× real-time" label beside the speed slider.
+    updateSpeedReadout() {
+        const el = document.getElementById('val-timeline-speed');
+        if (!el) return;
+        const N = this.events ? this.events.length : 0;
+        const animSum = (N * this.animationEngine?.baseMergeDuration || N * 0.8) / this.timelineSpeed;
+        const pauseSum = (this.pauseSum1x || 0) / this.timelineSpeed;
+        const vizDur = animSum + pauseSum;
+        let txt = `${this.timelineSpeed.toFixed(2)}\u00d7`;
+        if (this.realSpanSec > 0 && vizDur > 0) {
+            txt += ` \u00b7 \u2248 ${this._fmtMult(this.realSpanSec / vizDur)} real-time`;
+        }
+        el.textContent = txt;
+    }
+
+    _fmtMult(x) {
+        if (x >= 100) return Math.round(x / 10) * 10 + '\u00d7';
+        if (x >= 10) return Math.round(x) + '\u00d7';
+        return x.toFixed(1) + '\u00d7';
+    }
+
     togglePlay() {
         this.isPlaying = !this.isPlaying;
         this.ui.playBtn.textContent = this.isPlaying ? 'Pause' : 'Play';
@@ -1544,7 +1609,16 @@ class VGGTHierarchyApp {
             const ref = Math.max(this.lastStepTime, this.lastAnimEndTime || 0);
             const nextIdx = this.currentEventIndex + 1;
             const nextEvent = nextIdx < this.events.length ? this.events[nextIdx] : null;
-            const delay = nextEvent && nextEvent.delay ? nextEvent.delay : 0.12;
+            // Pace by the REAL gap (seconds) before the next event, mapped to
+            // playback seconds and divided by the live speed multiplier. Long
+            // compute pauses read as pauses; bursts fire back-to-back. Falls back
+            // to the legacy per-event delay when a dataset has no timestamps.
+            let delay;
+            if (nextEvent && typeof nextEvent.realGapSec === 'number') {
+                delay = Math.min(nextEvent.realGapSec * this.REAL_SEC_TO_VIZ, this.MAX_PAUSE_SEC) / this.timelineSpeed;
+            } else {
+                delay = (nextEvent && nextEvent.delay ? nextEvent.delay : 0.12) / this.timelineSpeed;
+            }
             if (!hasActiveAnims && time - ref > delay) {
                 if (this.currentEventIndex < this.events.length - 1) {
                     this.step(1);

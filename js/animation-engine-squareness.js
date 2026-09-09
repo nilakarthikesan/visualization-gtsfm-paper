@@ -8,8 +8,13 @@ export class SquarenessAnimationEngine {
         this.worldGroup = worldGroup;
         this.mergeEvents = [];
         this.activeAnimations = [];
-        this.mergeDuration = 0.8;
-        this.leafConvergeDuration = 0.8;
+        // Base (1x) animation durations. Live playback speed scales these via
+        // setSpeed() so the whole build gets snappier/slower together.
+        this.baseMergeDuration = 0.8;
+        this.baseConvergeDuration = 0.8;
+        this.mergeDuration = this.baseMergeDuration;
+        this.leafConvergeDuration = this.baseConvergeDuration;
+        this.speed = 1;
 
         this.particleEngine = null;
         this.convergenceEngine = null;
@@ -89,6 +94,18 @@ export class SquarenessAnimationEngine {
         }
     }
 
+    // Live playback speed. Scales the per-event materialization animations so a
+    // faster speed makes clusters snap in quicker (and the play loop shortens the
+    // real-time pauses by the same factor). 1 = base look.
+    setSpeed(mult) {
+        this.speed = Math.max(0.05, mult || 1);
+        this.mergeDuration = this.baseMergeDuration / this.speed;
+        this.leafConvergeDuration = this.baseConvergeDuration / this.speed;
+        if (this.convergenceEngine) {
+            this.convergenceEngine.convergeDuration = this.baseConvergeDuration / this.speed;
+        }
+    }
+
     initTimeline() {
         const treeNodes = this.layoutEngine.treeNodes;
         if (!treeNodes || treeNodes.length === 0) {
@@ -118,39 +135,34 @@ export class SquarenessAnimationEngine {
                 return a.cluster.path.localeCompare(b.cluster.path);
             });
 
-            const TOTAL_ANIMATION_SEC = 8;
-            const MIN_GAP_SEC = 0.18;
-            const MAX_GAP_SEC = 0.4;
-            const epochs = allEvents.map(e => e.timestamp);
-            const minEpoch = Math.min(...epochs);
-            const maxEpoch = Math.max(...epochs);
-            const realSpan = maxEpoch - minEpoch;
-
-            for (let i = 0; i < allEvents.length; i++) {
-                if (realSpan > 0) {
-                    const normalizedT = (allEvents[i].timestamp - minEpoch) / realSpan;
-                    allEvents[i].animationTime = normalizedT * TOTAL_ANIMATION_SEC;
-                } else {
-                    allEvents[i].animationTime = i * 1.0;
-                }
-            }
-
-            for (let i = 1; i < allEvents.length; i++) {
-                const gap = allEvents[i].animationTime - allEvents[i - 1].animationTime;
-                if (gap < MIN_GAP_SEC) {
-                    allEvents[i].animationTime = allEvents[i - 1].animationTime + MIN_GAP_SEC;
-                }
-            }
+            // Faithful real-timing (Frank): pace each event by the REAL number of
+            // seconds that elapsed between it and the previous event, instead of
+            // squashing everything into a fixed window with a hard max-gap clamp
+            // (the old TOTAL_ANIMATION_SEC / MAX_GAP_SEC=0.4 made every gap read as
+            // ~uniform, i.e. a fixed DT). We store the real gap in seconds on each
+            // event; the play loop maps real seconds -> playback seconds using the
+            // live speed slider, so long compute pauses (e.g. bundle adjustment)
+            // feel long and quick VGGT bursts feel quick.
+            //
+            // GAP_CAP guards against mtime artifacts: exported subtrees can carry a
+            // file-modified time hours/days apart (a bogus inter-section jump). We
+            // cap any single gap so those artifacts become a bounded "section
+            // pause" rather than dead time, while every real intra-section gap
+            // (which matches Kathir's real_time_s exactly) is preserved.
+            const GAP_CAP_SEC = 300;
 
             for (let i = 0; i < allEvents.length; i++) {
                 if (i === 0) {
-                    allEvents[i].delay = 0.15;
+                    allEvents[i].realGapSec = 0;
                 } else {
-                    allEvents[i].delay = Math.min(
-                        allEvents[i].animationTime - allEvents[i - 1].animationTime,
-                        MAX_GAP_SEC
-                    );
+                    const raw = allEvents[i].timestamp - allEvents[i - 1].timestamp;
+                    allEvents[i].realGapSec = Math.max(0, Math.min(raw, GAP_CAP_SEC));
                 }
+            }
+
+            // Legacy per-event delay (used for manual stepping / non-play fallback).
+            for (let i = 0; i < allEvents.length; i++) {
+                allEvents[i].delay = i === 0 ? 0.15 : 0.2;
             }
         } else {
             const leaves = allEvents.filter(e => e.isLeaf);
@@ -159,7 +171,7 @@ export class SquarenessAnimationEngine {
             merges.sort((a, b) => b.depth - a.depth || a.cluster.path.localeCompare(b.cluster.path));
             allEvents.length = 0;
             allEvents.push(...leaves, ...merges);
-            for (const e of allEvents) e.delay = 0.12;
+            for (const e of allEvents) { e.delay = 0.12; e.realGapSec = 0; }
         }
 
         this.mergeEvents = allEvents;

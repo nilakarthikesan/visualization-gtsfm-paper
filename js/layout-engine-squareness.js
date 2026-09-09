@@ -121,7 +121,13 @@ export class SquarenessLayoutEngine {
      * points don't inflate the box and shrink the whole cluster. Returns the
      * center and half-width/height in the cloud's local (pre-scale) coordinates.
      */
-    robustXYExtent(cluster, lowP = 0.01, highP = 0.99) {
+    // Near-full extent (0.3%-99.7%): only the most extreme outlier points are
+    // trimmed, so the box captures essentially the whole cluster body. Combined with
+    // FIT_FRAC (< 1) and the inter-tile padding gap, this guarantees the visible
+    // cluster stays inside its own tile and never crosses into a neighbor (no overlap).
+    // The tight 1%-99% box used before left a ~1% tail outside the box that spilled
+    // across tile edges into adjacent clusters.
+    robustXYExtent(cluster, lowP = 0.003, highP = 0.997) {
         const geom = cluster.pointCloud && cluster.pointCloud.geometry;
         if (!geom || !geom.attributes.position) return null;
         const pos = geom.attributes.position;
@@ -241,22 +247,24 @@ export class SquarenessLayoutEngine {
         console.log(`Root rect: ${ROOT_W.toFixed(0)} x ${ROOT_H.toFixed(0)}`);
 
         const rootRect = { x: -ROOT_W / 2, y: -ROOT_H / 2, w: ROOT_W, h: ROOT_H };
-        // Default: squarified tiling. The old recursive per-node slicing
-        // (assignLeafTiles) followed the tree depth, so Brussels' deep unbalanced
-        // C_1 chain (32/40 leaves, depth 12) got peeled into a vertical ladder of
-        // flat bands - extreme-aspect slivers (up to 28:1), an 8x fitScale swing,
-        // and even a negative-width tile (frame 77 -> mirror-inverted cluster).
-        // Squarified tiling gives every leaf a near-square tile regardless of the
-        // tree's shape, while each top-level subtree still keeps its own contiguous
-        // region so sections build in order and merges stay compact.
-        // ?tiling=recursive restores the old behavior for comparison.
-        let tiling = 'squarified';
+        // Default: recursive 2D subdivision by SECTION (the arrangement Frank asked
+        // for). Root's direct children are sections; each section gets a rectangle
+        // sized by its LEAF COUNT, and inside a section every leaf gets an equal-area,
+        // near-square, non-overlapping tile. This keeps the recursive-subdivision look
+        // (nested rectangles per subtree) while avoiding the caterpillar failure of the
+        // pure per-node guillotine (assignLeafTiles), which peeled Brussels' depth-12
+        // C_1 chain into a vertical ladder of extreme-aspect slivers. Alternatives for
+        // comparison: ?tiling=squarified (leaf-weight squarify) and ?tiling=guillotine
+        // (pure recursive per-node subdivision).
+        let tiling = 'sections';
         try {
             const p = new URLSearchParams(window.location.search);
-            if (p.get('tiling') === 'recursive') tiling = 'recursive';
+            const t = p.get('tiling');
+            if (t === 'squarified' || t === 'guillotine') tiling = t;
         } catch (e) { /* non-browser context */ }
-        if (tiling === 'recursive') this.assignLeafTiles(rootNode, rootRect);
-        else this.assignLeafTilesSquarified(rootNode, rootRect);
+        if (tiling === 'squarified') this.assignLeafTilesSquarified(rootNode, rootRect);
+        else if (tiling === 'guillotine') this.assignLeafTiles(rootNode, rootRect);
+        else this.assignLeafTilesRecursive(rootNode, rootRect);
         this.computeMergePositions(rootNode);
 
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -678,6 +686,59 @@ export class SquarenessLayoutEngine {
         for (const t of topTiles) {
             const region = this.padRect(t);
             this.tileSubtree(t.it.node, region);
+        }
+    }
+
+    /** Number of leaf clusters under a node (dataset-agnostic, no hardcoded counts). */
+    countLeaves(node) {
+        if (!node) return 0;
+        if (node.children.length === 0) return 1;
+        let sum = 0;
+        for (const child of node.children) sum += this.countLeaves(child);
+        return sum;
+    }
+
+    /**
+     * Recursive 2D subdivision (default; Frank's ask, de-slivered).
+     *
+     * Every subtree owns a contiguous rectangle, subdivided recursively among its
+     * children. At each internal node the children are packed with squarify, each
+     * child's area proportional to its LEAF COUNT (how many clusters live under it),
+     * then we recurse into every child rectangle. This is exactly "recursive
+     * subdivision in 2D": root -> sections -> subsections -> leaf tiles.
+     *
+     * Why squarify-by-leaf-count and not the pure per-node guillotine
+     * (assignLeafTiles): Brussels' C_1 is a depth-12 caterpillar (each node = 1 leaf
+     * + 1 big subtree). Guillotine always cut the same way and peeled that chain into
+     * a vertical ladder of extreme-aspect slivers. Squarify chooses the split
+     * orientation that keeps tiles closest to square, so a peeled leaf gets a squarish
+     * tile instead of a 20:1 band, while keeping the key property the flatten-to-grid
+     * approach lost: because every subtree stays a contiguous rectangle, an
+     * intermediate merged node fills its own rectangle and never overlaps a sibling
+     * subtree during the build.
+     */
+    assignLeafTilesRecursive(rootNode, rootRect) {
+        this.subdivideNode(rootNode, rootRect);
+    }
+
+    /** Recursively subdivide `rect` among `node`'s subtree (contiguous per subtree). */
+    subdivideNode(node, rect) {
+        if (node.children.length === 0) {
+            node.cluster.rect = this.padRect(rect);
+            return;
+        }
+        // One child: it owns the whole rect (no spurious split), recurse.
+        if (node.children.length === 1) {
+            this.subdivideNode(node.children[0], rect);
+            return;
+        }
+        const items = node.children.map(ch => ({
+            node: ch,
+            weight: Math.max(this.countLeaves(ch), 1)
+        }));
+        const tiles = this.squarifyTiles(items, rect);
+        for (const t of tiles) {
+            this.subdivideNode(t.it.node, { x: t.x, y: t.y, w: t.w, h: t.h });
         }
     }
 

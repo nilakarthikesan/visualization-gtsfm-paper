@@ -5,6 +5,8 @@ const PER_POINT_DELAY_FRAC = 0.3;
 export class ConvergenceEngine {
     constructor() {
         this.clusterData = new Map();
+        // Writable so the playback-speed control can scale it live.
+        this.convergeDuration = CONVERGE_DURATION;
     }
 
     prepareCluster(cluster) {
@@ -100,10 +102,6 @@ export class ConvergenceEngine {
         }
 
         data.cluster.pointCloud.geometry.attributes.position.needsUpdate = true;
-    }
-
-    get convergeDuration() {
-        return CONVERGE_DURATION;
     }
 
     _easeOutExpo(t) {
