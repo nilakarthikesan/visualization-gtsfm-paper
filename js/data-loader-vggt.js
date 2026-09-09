@@ -9,8 +9,8 @@ import { createPointMaterial } from './point-material.js?v=47';
 // annotations (e.g. the final "Assembled ... — <scene>" label). Distinct from
 // `label`, which is the dataset-picker text.
 export const DATASETS = {
-    BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
     original: { label: 'Gerrard Hall', sceneName: 'Gerrard Hall', basePath: 'data/gerrard-hall-vggt/results', useManifest: false, pointScale: 1.0 },
+    BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
     // `hidden` keeps a dataset reachable by ?dataset=<key> for local verification while
     // leaving it out of the picker. Thanjavur is hidden (and excluded from the hosted
     // build) until its diverged C_2 merges are sorted out.
@@ -21,6 +21,8 @@ export const DATASETS = {
     // C_4 (the "community photo collection") was removed: per Kathir, Dubrovnik
     // was never reconstructed successfully, so it should not be shown.
 };
+
+export const DEFAULT_DATASET = 'original';
 
 /**
  * Uniform spatial hash grid for approximate nearest-neighbor lookups.
@@ -144,7 +146,7 @@ export class Cluster {
 }
 
 export class VGGTDataLoader {
-    constructor(datasetKey = 'BRUSSELS') {
+    constructor(datasetKey = DEFAULT_DATASET) {
         if (!Object.hasOwn(DATASETS, datasetKey)) throw new Error(`Unknown dataset: ${datasetKey}`);
         this.dataset = DATASETS[datasetKey];
         this.datasetKey = datasetKey;

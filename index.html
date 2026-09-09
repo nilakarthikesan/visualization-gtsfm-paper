@@ -267,19 +267,19 @@
         <p class="muted" style="max-width:760px; margin-bottom:22px;">
             The viewer below replays the actual pipeline on real data: each cluster reconstruction appears as
             VGGT-&Omega; processes its partition, then clusters fuse pairwise up the nested-dissection tree
-            until the final globally consistent model assembles. Press <strong>Play</strong>, or scrub the
-            timeline to any merge event.
+            until the final globally consistent model assembles. Playback starts automatically;
+            pause at any time or scrub the timeline to any merge event.
         </p>
         <div class="demo-tabs">
-            <button class="demo-tab active" data-dataset="BRUSSELS">Grand-Place Brussels &middot; 234 images</button>
-            <button class="demo-tab" data-dataset="original">Gerrard Hall</button>
+            <button class="demo-tab active" data-dataset="original">Gerrard Hall</button>
+            <button class="demo-tab" data-dataset="BRUSSELS">Grand-Place Brussels &middot; 234 images</button>
         </div>
         <div class="demo-frame-wrap">
-            <iframe id="demo-frame" src="hierarchy-vggt.html?dataset=BRUSSELS&embed=1&v=4" title="Interactive hierarchical reconstruction demo" loading="lazy"></iframe>
+            <iframe id="demo-frame" src="hierarchy-vggt.html?dataset=original&embed=1&v=4" title="Interactive hierarchical reconstruction demo"></iframe>
         </div>
         <div class="demo-hint">
             <span>Drag to orbit &middot; scroll to zoom &middot; right-drag to pan &middot; click the timeline to jump between merge events</span>
-            <a id="demo-full-link" href="hierarchy-vggt.html?dataset=BRUSSELS" target="_blank">Open the full visualizer with all controls &nearr;</a>
+            <a id="demo-full-link" href="hierarchy-vggt.html?dataset=original" target="_blank">Open the full visualizer with all controls &nearr;</a>
         </div>
     </div>
 </section>
@@ -387,11 +387,11 @@
     <div class="wrap">
         <h2>About this visualization</h2>
         <p class="muted">
-            The interactive demo above is a faithful replay of the pipeline's actual outputs on Grand-Place
-            Brussels: every point cloud shown is a real per-cluster reconstruction from the paper's experiments,
-            and merge events follow the true nested-dissection tree (40 leaf reconstructions fusing through 53
-            merges into the final model). Cluster tiles are laid out with a squareness-optimized recursive
-            subdivision; per-point correspondences between merge levels drive the fusion animation.
+            The interactive demo replays real reconstructions of Gerrard Hall and Grand-Place Brussels.
+            Gerrard Hall starts by default, with six leaf reconstructions and three merges; select Brussels
+            to explore its 40 leaf reconstructions and 53 merges. Events follow each dataset's
+            nested-dissection tree, with screen regions reserved recursively from the final reconstruction.
+            Per-point correspondences between merge levels drive the fusion animation.
         </p>
     </div>
 </section>

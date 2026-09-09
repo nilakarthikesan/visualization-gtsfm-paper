@@ -4,7 +4,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=54';
+import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=55';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
 import { LayoutGuides } from './layout-guides.js?v=2';
 import { bindRegionClip } from './region-clipping.js?v=1';
@@ -789,7 +789,7 @@ export class VGGTHierarchyApp {
     async start() {
         try {
             const params = new URLSearchParams(window.location.search);
-            const requested = params.get('dataset') || 'BRUSSELS';
+            const requested = params.get('dataset') || DEFAULT_DATASET;
             if (!Object.hasOwn(DATASETS, requested)) throw new Error(`Unknown dataset: ${requested}`);
             this.datasetKey = requested;
 
@@ -958,6 +958,9 @@ export class VGGTHierarchyApp {
             this.lastAnimEndTime = 0;
             this.hadActiveAnims = false;
 
+            // Dataset changes reload this viewer, so both entry paths autoplay
+            // once geometry, layout, and camera framing are ready.
+            if (this.events.length > 0) this.togglePlay();
             this.updateUI();
 
             this.ui.loading.style.display = 'none';
