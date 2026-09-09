@@ -33,15 +33,17 @@ Open [http://localhost:8000/hierarchy-vggt.html](http://localhost:8000/hierarchy
 
 Gerrard Hall is the default dataset. Playback starts automatically after loading,
 including when switching datasets in the project-page tabs or the viewer's picker.
-Each uninterrupted replay lasts 30 seconds, including the final merge. Recorded
+Each uninterrupted replay lasts 0.5 seconds times its number of events, including
+the final merge: 4.5 seconds for Gerrard Hall (9 events) and 46.5 seconds for Brussels
+(93 events). This sets the average pace; individual gaps retain their relative timing. Recorded
 event gaps are scaled directly with no minimum delay; animations shorten to fit.
-The live run clock shows accelerated elapsed time alongside the 30-second playback
+The live run clock shows accelerated elapsed time alongside the dataset's playback
 counter. Pause freezes both clocks and animations; scrubbing moves them together.
 
 Point matching runs in a background worker using stable reconstruction coordinates,
 with lookahead for the next two animated merges. Loading and playback never wait
 for matches: a merge whose matches are not ready uses a crossfade in its assigned
-regions, keeping the 30-second schedule (including during recording). Completed
+regions, keeping the event-count-based schedule (including during recording). Completed
 matches are cached for replay until the viewer reloads. Seeking reprioritizes pending
 work; if workers are unavailable, the viewer continues with crossfades.
 

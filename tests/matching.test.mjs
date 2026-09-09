@@ -164,8 +164,9 @@ function playbackApp() {
     engine.convergenceEngine.prepareAllLeaves(engine.getLeafClusters());
     const {service,worker} = coordinator(clusters);
     const app = Object.create(VGGTHierarchyApp.prototype);
+    const plan = planPlayback(events);
     Object.assign(app,{events,animationEngine:engine,matchingCoordinator:service,currentEventIndex:0,
-        playbackPlan:planPlayback(events),playback:new PlaybackClock(30),isPlaying:false,
+        playbackPlan:plan,playback:new PlaybackClock(plan.duration),isPlaying:false,
         ui:{playBtn:{textContent:'Play'},eventLabel:{textContent:''}},
         frustumEngine:{syncToEventIndex(){}},fitCameraToVisible(){},updateUI(){},updateAnnotation(){},updatePlaybackClock(){}
     });
@@ -190,7 +191,7 @@ test('late results do not replace fallback; pause, seek, replay and completion k
     app.jumpTo(3); app.jumpTo(0); app.seekPlayback(app.playbackPlan.starts[3]);
     assert.ok(engine.activeAnimations.some(a => a.type === 'fadeIn'));
     app.playback.play(300); app.advancePlayback(301); engine.update(0);
-    assert.equal(app.playback.elapsed,30);
+    assert.equal(app.playback.elapsed,app.events.length * 0.5);
     assert.equal(app.finalViewActive,true);
     assert.deepEqual([...clusters.values()].filter(c => c.pointCloud.visible),[clusters.get('merged')]);
     service.dispose();
@@ -201,10 +202,12 @@ test('fallback-only playback keeps its deadline even while recording and after w
     worker.onerror({message:'unavailable'});
     app.mediaRecorder = {state:'recording'};
     app.isPlaying = true; app.playback.play(100);
-    for (const elapsed of [0,10,19.3,19.7,20,29.3,29.7,30]) {
+    const plan = app.playbackPlan;
+    const samples = plan.starts.flatMap((start, i) => [start, start + plan.animationDurations[i] / 2]);
+    for (const elapsed of [...samples, plan.duration]) {
         app.advancePlayback(100+elapsed); engine.update(0);
     }
-    assert.equal(app.playback.elapsed,30);
+    assert.equal(app.playback.elapsed,app.events.length * 0.5);
     assert.equal(app.isPlaying,false);
     assert.equal(app.mediaRecorder.state,'recording');
     assert.deepEqual([...clusters.values()].filter(c => c.pointCloud.visible),[clusters.get('merged')]);

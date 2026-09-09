@@ -52,14 +52,15 @@ outside a cell are clipped during the explanatory view and available during manu
 
 ## Animation
 
-Each dataset automatically replays in exactly 30 seconds of unpaused playback,
-starting after loading. The schedule scales recorded gaps (with the existing idle
+Each dataset automatically replays in 0.5 seconds per event of unpaused playback,
+starting after loading: 4.5 seconds for Gerrard Hall's 9 events, or 46.5 seconds for
+Brussels' 93 events. The schedule scales recorded gaps (with the existing idle
 stall compression) directly, with no minimum event delay. Events sharing a timestamp
 remain simultaneous; animation durations shrink to the available interval before
 each event's scheduled completion. Untimed datasets use evenly spaced events.
 An absolute monotonic playback clock prevents per-frame delays from accumulating;
 a late frame catches up to its scheduled state. The final merge is settled by the
-30-second deadline. Browser rendering presents that state on the next available frame.
+dataset's deadline. Browser rendering presents that state on the next available frame.
 
 The visible run clock interpolates elapsed source timestamps and explicitly labels
 compressed idle intervals. A separate playback counter and continuous progress bar

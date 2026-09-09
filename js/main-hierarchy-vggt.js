@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { planPlayback, PlaybackClock, formatClock, DEFAULT_PLAYBACK_SECONDS } from './playback-timeline.js?v=2';
+import { planPlayback, PlaybackClock, formatClock } from './playback-timeline.js?v=3';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -103,7 +103,6 @@ export class VGGTHierarchyApp {
         // the camera, so auto-framing cedes control until Reset (smart-suspend).
         this.autoFrameEnabled = localStorage.getItem('gh-auto-frame') !== 'false';
         this.userCameraOverride = false;
-        this.TARGET_VIZ_SEC = DEFAULT_PLAYBACK_SECONDS;
         // Hold the final composition for the entire timeline. Follow remains opt-in.
         this.fixedFrame = localStorage.getItem('gh-fixed-frame') !== 'false';
         const regions = new URLSearchParams(window.location.search).get('regions');
@@ -859,7 +858,7 @@ export class VGGTHierarchyApp {
             if (!this.events.length) throw new Error('No reconstruction events loaded');
             this.currentEventIndex = 0;
 
-            this.playbackPlan = planPlayback(this.events, this.TARGET_VIZ_SEC);
+            this.playbackPlan = planPlayback(this.events);
             this.playback = new PlaybackClock(this.playbackPlan.duration);
             this.animationEngine.now = () => this.playback.elapsed * 1000;
             this.refreshMatching();
@@ -1168,7 +1167,7 @@ export class VGGTHierarchyApp {
             if (element && element.textContent !== text) element.textContent = text;
         };
         setText(run, clock ? formatClock(clock.elapsed, true) : 'No timestamps');
-        setText(progress, formatClock(elapsed) + ' / ' + formatClock(this.playback.duration));
+        setText(progress, formatClock(elapsed, true, false) + ' / ' + formatClock(this.playback.duration, true, false));
         setText(status, elapsed >= this.playback.duration ? 'Complete'
             : !this.isPlaying ? 'Paused'
             : clock?.rate > 0 ? clock.rate.toFixed(1) + '×' + (clock.compressedIdle ? ' · idle gap compressed' : '')
