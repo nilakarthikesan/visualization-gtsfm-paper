@@ -51,6 +51,21 @@ outside a cell are clipped during the explanatory view and available during manu
 
 ## Animation
 
+Each dataset automatically replays in exactly 60 seconds of unpaused playback,
+starting after loading. The schedule scales recorded gaps (with the existing idle
+stall compression) directly, with no minimum event delay. Events sharing a timestamp
+remain simultaneous; animation durations shrink to the available interval before
+each event's scheduled completion. Untimed datasets use evenly spaced events.
+An absolute monotonic playback clock prevents per-frame delays from accumulating;
+a late frame catches up to its scheduled state. The final merge is settled by the
+60-second deadline. Browser rendering presents that state on the next available frame.
+
+The visible run clock interpolates elapsed source timestamps and explicitly labels
+compressed idle intervals. A separate playback counter and continuous progress bar
+show progress through the minute. Pause freezes time and reconstruction animations;
+seek, reset, and replay update the clocks and scene together. Old saved speed settings
+are ignored; each dataset gets its own automatic timing.
+
 Leaf reveals expand a compact copy of the reconstruction inside its fitted
 bounds. Matched and unmatched merge points interpolate within the parent region.
 A straight path between two inlier points in a rectangle stays inside that rectangle;

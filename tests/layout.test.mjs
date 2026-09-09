@@ -6,6 +6,7 @@ import { SquarenessLayoutEngine } from '../js/layout-engine-squareness.js';
 import { planFloorplan } from '../js/recursive-floorplan.js';
 import { ConvergenceEngine } from '../js/convergence-engine.js';
 import { centralIndices } from '../js/robust-footprint.js';
+import { planPlayback, PlaybackClock, formatClock } from '../js/playback-timeline.js';
 
 globalThis.window = { innerHeight: 900, devicePixelRatio: 1, location: { search: '' } };
 const { Cluster, VGGTDataLoader } = await import('../js/data-loader-vggt.js');
@@ -46,6 +47,113 @@ function synthetic(path, positions) {
     g.setAttribute('color', new THREE.Float32BufferAttribute(positions.map(()=>1), 3));
     c.setPointCloud(g, createPointMaterial());
     return c;
+}
+
+test('one-minute schedules preserve event timing without a minimum delay', () => {
+    assert.equal(planPlayback([]).duration, 0);
+    for (const count of [1, 9, 93, 500]) for (const timed of [false, true]) {
+        const events = Array.from({length: count}, (_, i) => ({
+            realGapSec: timed && i ? (i % 7 ? 1 : 10000) : 0
+        }));
+        const plan = planPlayback(events);
+        assert.equal(plan.duration, 60);
+        assert.equal(plan.starts.length, count);
+        assert.equal(plan.ends[count - 1], count > 1 ? 60 : 0);
+        for (let i = 0; i < count; i++) {
+            assert.ok(plan.animationDurations[i] >= 0);
+            assert.ok(plan.animationDurations[i] <= .8 + 1e-9);
+            assert.ok(plan.starts[i] >= (plan.ends[i - 1] || 0));
+            assert.ok(plan.indexAt(plan.starts[i]) >= i);
+        }
+        assert.equal(plan.indexAt(60), count - 1);
+        assert.equal(plan.runClock(30), null, 'must not invent missing run timestamps');
+    }
+    const burst = planPlayback([{realGapSec:0}, {realGapSec:0}, {realGapSec:1}, {realGapSec:5999}]);
+    assert.deepEqual(burst.ends, [0, 0, .01, 60]);
+    assert.equal(burst.animationDurations[1], 0);
+    assert.equal(burst.animationDurations[2], .01);
+});
+
+test('playback clock excludes pauses, supports seeks, and cannot accumulate frame drift', () => {
+    const clock = new PlaybackClock(60);
+    clock.play(100);
+    for (let i = 0; i < 1000; i++) clock.update(100 + i / 100);
+    clock.pause(110);
+    assert.equal(clock.update(200), 10);
+    clock.play(300);
+    assert.ok(Math.abs(clock.update(349.999) - 59.999) < 1e-9);
+    assert.equal(clock.playing, true);
+    assert.equal(clock.update(350), 60);
+    assert.equal(clock.playing, false);
+    clock.seek(0, 400); clock.play(400);
+    assert.equal(clock.update(470), 60, 'a delayed frame must catch up to the deadline');
+    clock.seek(40, 500); clock.play(500);
+    assert.equal(clock.update(520), 60);
+});
+
+test('run clock advances between events and labels compressed idle intervals', () => {
+    const plan = planPlayback([
+        {effTime:100, realGapSec:0},
+        {effTime:200, realGapSec:100},
+        {effTime:90200, realGapSec:100, wasStall:true}
+    ]);
+    assert.equal(plan.runClock(0).elapsed, 0);
+    assert.equal(plan.runClock(15).elapsed, 50);
+    const skipped = plan.runClock(45);
+    assert.ok(Math.abs(skipped.elapsed - 45100) < 1e-9);
+    assert.equal(skipped.compressedIdle, true);
+    assert.equal(plan.runClock(60).elapsed, 90100);
+    assert.equal(formatClock(60), '01:00');
+    assert.equal(formatClock(90100, true), '25:01:40.0');
+});
+
+test('pausing the playback clock freezes an in-progress reconstruction animation', () => {
+    const leaf = synthetic('merged', [-1,-1,0, 1,1,0]);
+    const clusters = new Map([['merged', leaf]]);
+    const layout = new SquarenessLayoutEngine(clusters); layout.computeLayout();
+    const engine = new SquarenessAnimationEngine(clusters, layout, new THREE.Group());
+    engine.convergenceEngine = new ConvergenceEngine();
+    engine.convergenceEngine.prepareAllLeaves([leaf]);
+    engine.initTimeline();
+    const clock = new PlaybackClock(60);
+    engine.now = () => clock.elapsed * 1000;
+    clock.play(100); engine.playEvent(0);
+    clock.pause(100.2); engine.update(0);
+    const halfway = Array.from(leaf.pointCloud.geometry.attributes.position.array);
+    clock.update(200); engine.update(0);
+    assert.deepEqual(Array.from(leaf.pointCloud.geometry.attributes.position.array), halfway);
+    clock.play(200); clock.update(201); engine.update(0);
+    assert.notDeepEqual(Array.from(leaf.pointCloud.geometry.attributes.position.array), halfway);
+    assert.equal(engine.activeAnimations.length, 0);
+});
+
+function verifyMinutePlayback(clusters, engine, events) {
+    const plan = planPlayback(events);
+    const app = Object.create(VGGTHierarchyApp.prototype);
+    Object.assign(app, { events, animationEngine:engine, playbackPlan:plan,
+        playback:new PlaybackClock(60), currentEventIndex:0, isPlaying:true,
+        ui:{playBtn:{textContent:'Pause'}}, frustumEngine:{syncToEventIndex(){}},
+        fitCameraToVisible(){}, updateUI(){}, updatePlaybackClock(){}, updateAnnotation(){},
+        collapseToFinalView(){this.finalViewActive=true;} });
+    if (!engine.preMatchedCloud) engine.initTransitionBuffers('sharp');
+    engine.now = () => app.playback.elapsed * 1000;
+    app.startScheduledEvent(0);
+    app.playback.play(1000);
+    for (let i = 0; i < events.length; i++) {
+        const elapsed = plan.starts[i] + plan.animationDurations[i] / 2;
+        app.advancePlayback(1000 + elapsed);
+        engine.update(0);
+        assert.equal(app.currentEventIndex, plan.indexAt(app.playback.elapsed));
+        assert.equal(app.finalViewActive, undefined);
+    }
+    app.advancePlayback(1059.999); engine.update(0);
+    assert.equal(app.isPlaying, true, 'must not finish before the minute is over');
+    app.advancePlayback(1060);
+    assert.equal(app.playback.elapsed, 60);
+    assert.equal(app.isPlaying, false);
+    assert.equal(app.finalViewActive, true);
+    assert.equal(engine.activeAnimations.length, 0, 'final animation must finish inside the minute');
+    assert.deepEqual([...clusters.values()].filter(c => c.pointCloud?.visible), [clusters.get('merged')]);
 }
 
 test('95% means joint XY coverage, including tiny and degenerate populations', () => {
@@ -146,6 +254,7 @@ test('Gerrard Hall selection loads its own data and completes its nine-event hie
         }
         engine.applyEventInstant(events.length - 1);
         assert.deepEqual([...clusters.values()].filter(c => c.pointCloud?.visible), [clusters.get('merged')]);
+        verifyMinutePlayback(clusters, engine, events);
     } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
 });
 
@@ -242,6 +351,7 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
             if (size===0) assert.ok([...clusters.values()].every(c=>!c.frustumGeometry));
         }
         t.diagnostic('Verified 93 events, 40 reveals, 53 merges, and at least 95% point and camera-wireframe coverage.');
+        verifyMinutePlayback(clusters, engine, events);
     } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
 });
 

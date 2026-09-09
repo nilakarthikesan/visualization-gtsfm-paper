@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { planPlayback, PlaybackClock, formatClock } from './playback-timeline.js?v=1';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -9,7 +10,7 @@ import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
 import { LayoutGuides } from './layout-guides.js?v=2';
 import { bindRegionClip } from './region-clipping.js?v=1';
 import { InteractionEngine } from './interaction-engine.js?v=6';
-import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=48';
+import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=49';
 import { CameraEngine } from './camera-engine.js?v=40';
 import { updatePointScale, applyBlendMode, BLEND_MODES, updateFlowTime, setFlowParams, setPointSizeScale } from './point-material.js?v=47';
 import { FrustumEngine } from './frustum-engine.js?v=40';
@@ -101,17 +102,7 @@ export class VGGTHierarchyApp {
         // the camera, so auto-framing cedes control until Reset (smart-suspend).
         this.autoFrameEnabled = localStorage.getItem('gh-auto-frame') !== 'false';
         this.userCameraOverride = false;
-        // Playback speed (Frank): the timeline is paced by the REAL seconds between
-        // pipeline events; this multiplier speeds up/slows down that replay. 1 = base.
-        // Playback speed expressed directly in "x real-time" (Frank): speedX real
-        // seconds of computation play in 1 viz second. speedX = 1 is true 1:1
-        // real-time (very long, the "turn back to realtime" option); the default is
-        // a compressed value chosen so the whole build runs in ~TARGET_VIZ_SEC.
-        this.MAX_SPEEDX = 500;          // slider top: 500x real-time
-        this.MIN_SPEEDX = 1;            // slider bottom: true real-time
-        this.TARGET_VIZ_SEC = 45;       // default target playback length
-        this.speedX = parseFloat(localStorage.getItem('gh-speed-x')) || 0; // 0 => auto-pick on load
-        this.realSpanSec = 0;           // sum of (capped) real seconds between events
+        this.TARGET_VIZ_SEC = 60;
         // Hold the final composition for the entire timeline. Follow remains opt-in.
         this.fixedFrame = localStorage.getItem('gh-fixed-frame') !== 'false';
         const regions = new URLSearchParams(window.location.search).get('regions');
@@ -378,8 +369,7 @@ export class VGGTHierarchyApp {
             if (!this.animationEngine) return;
             const rect = this.ui.track.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
-            const index = Math.floor(pct * this.animationEngine.mergeEvents.length);
-            this.jumpTo(index);
+            if (this.playback) this.seekPlayback(pct * this.playback.duration);
         });
 
         this.ui.recordBtn = document.getElementById('btn-record');
@@ -580,19 +570,6 @@ export class VGGTHierarchyApp {
                 const v = parseFloat(e.target.value);
                 if (this.layoutEngine) { this.layoutEngine.FIT_FRAC = v; this.scheduleRelayout(); }
                 localStorage.setItem('gh-tile-fill', v);
-            });
-        }
-
-        // Playback Speed (Frank): the slider reads directly in "x real-time". It's
-        // log-scaled from 1x (true real-time, far left = "turn back to realtime") up
-        // to MAX_SPEEDX. The readout reports the factor plus the resulting length.
-        const speedSlider = document.getElementById('slider-timeline-speed');
-        if (speedSlider) {
-            if (this.speedX) speedSlider.value = this._speedXToPos(this.speedX);
-            speedSlider.addEventListener('input', (e) => {
-                const sx = this._posToSpeedX(parseFloat(e.target.value));
-                this.applyTimelineSpeed(sx);
-                localStorage.setItem('gh-speed-x', sx);
             });
         }
 
@@ -866,27 +843,12 @@ export class VGGTHierarchyApp {
             if (this.flowMode) this.animationEngine.setFlowEnabled(true);
             this.animationEngine.initTransitionBuffers(this.blendMode, this.isDark);
             this.events = this.animationEngine.initTimeline();
+            if (!this.events.length) throw new Error('No reconstruction events loaded');
             this.currentEventIndex = 0;
 
-            // realSpanSec = total real seconds of computation we replay (idle stalls
-            // already collapsed by the animation engine). At speedX the inter-event
-            // pauses are realGap/speedX, so this drives the default speed and readout.
-            this.realSpanSec = 0;
-            for (const e of this.events) {
-                this.realSpanSec += (typeof e.realGapSec === 'number' ? e.realGapSec : 0);
-            }
-            // Auto-pick a compressed default the first time (no saved preference).
-            // Every event costs at least one materialization animation, so that floor
-            // sets the shortest possible play-through; aim for TARGET_VIZ_SEC but never
-            // ask for a speed the floor makes unreachable (which would only misreport
-            // the rate while looking identical).
-            if (!this.speedX || this.speedX < this.MIN_SPEEDX) {
-                const animFloor = this.events.length *
-                    (this.animationEngine.baseMergeDuration || 0.8);
-                const target = Math.max(this.TARGET_VIZ_SEC, animFloor * 1.25);
-                this.speedX = this._clampSpeedX(this.realSpanSec / target);
-            }
-            this.applyTimelineSpeed(this.speedX);
+            this.playbackPlan = planPlayback(this.events, this.TARGET_VIZ_SEC);
+            this.playback = new PlaybackClock(this.playbackPlan.duration);
+            this.animationEngine.now = () => this.playback.elapsed * 1000;
 
             const leafClusters = this.animationEngine.getLeafClusters();
             this.convergenceEngine.prepareAllLeaves(leafClusters);
@@ -954,9 +916,7 @@ export class VGGTHierarchyApp {
             else this.fitCameraToAllLeaves(true);
 
             this.isPlaying = false;
-            this.lastStepTime = 0;
-            this.lastAnimEndTime = 0;
-            this.hadActiveAnims = false;
+            if (this.events.length) this.seekPlayback(0);
 
             // Dataset changes reload this viewer, so both entry paths autoplay
             // once geometry, layout, and camera framing are ready.
@@ -993,7 +953,7 @@ export class VGGTHierarchyApp {
         // Reserve fixed UI bands so changing annotation text cannot reframe a build.
         const embed = document.body.classList.contains('embed-mode');
         const top = embed ? 80 : 125;
-        const bottom = embed ? 80 : 200;
+        const bottom = embed ? 220 : 260;
         return { left: 24, top, width: Math.max(100, width - reserved - 48),
             height: Math.max(100, window.innerHeight - top - bottom) };
     }
@@ -1079,6 +1039,7 @@ export class VGGTHierarchyApp {
     }
 
     step(direction) {
+        if (this.playback) return this.jumpTo(this.currentEventIndex + direction);
         // Manual stepping can interrupt a reveal or merge. Settle the current
         // frontier before starting another animation that uses the shared buffers.
         this.animationEngine.applyEventInstant(this.currentEventIndex);
@@ -1108,6 +1069,11 @@ export class VGGTHierarchyApp {
         if (this.finalViewActive && index < this.events.length - 1) {
             this.undoFinalView();
         }
+        if (this.playback) {
+            const seconds = index === 0 ? 0
+                : index === this.events.length - 1 ? this.playback.duration : this.playbackPlan.ends[index];
+            this.playback.seek(seconds, performance.now() / 1000);
+        }
         this.currentEventIndex = index;
         this.animationEngine.applyEventInstant(index);
         this.frustumEngine.syncToEventIndex(this.events, index);
@@ -1127,6 +1093,7 @@ export class VGGTHierarchyApp {
     }
 
     reset() {
+        this.playback?.pause(performance.now() / 1000);
         this.isPlaying = false;
         this.ui.playBtn.textContent = 'Play';
         // Resume auto-framing: Reset is the explicit "give the cinematic camera back"
@@ -1168,90 +1135,89 @@ export class VGGTHierarchyApp {
         this.layoutEngine.computeLayout();
         this.convergenceEngine.prepareAllLeaves(this.animationEngine.getLeafClusters());
         this.layoutGuides?.rebuild();
-        this.jumpTo(this.currentEventIndex);
+        if (this.playback) this.seekPlayback(this.playback.update(performance.now() / 1000));
+        else this.jumpTo(this.currentEventIndex);
         if (this.fixedFrame) this.fitCameraToLayoutBounds(true);
     }
 
-    _clampSpeedX(x) {
-        return Math.min(this.MAX_SPEEDX, Math.max(this.MIN_SPEEDX, x || 1));
+    updatePlaybackClock() {
+        if (!this.playback) return;
+        const elapsed = this.playback.elapsed;
+        const clock = this.playbackPlan.runClock(elapsed);
+        const run = document.getElementById('run-clock');
+        const progress = document.getElementById('playback-clock');
+        const status = document.getElementById('clock-status');
+        const setText = (element, text) => {
+            if (element && element.textContent !== text) element.textContent = text;
+        };
+        setText(run, clock ? formatClock(clock.elapsed, true) : 'No timestamps');
+        setText(progress, formatClock(elapsed) + ' / ' + formatClock(this.playback.duration));
+        setText(status, elapsed >= this.playback.duration ? 'Complete'
+            : !this.isPlaying ? 'Paused'
+            : clock?.rate > 0 ? clock.rate.toFixed(1) + '×' + (clock.compressedIdle ? ' · idle gap compressed' : '')
+            : 'Playing');
+        if (this.ui.progressBar) this.ui.progressBar.style.width = (elapsed / this.playback.duration * 100) + '%';
     }
 
-    // Log map between the 0..1 slider position and speedX in [MIN_SPEEDX, MAX_SPEEDX].
-    _posToSpeedX(pos) {
-        const p = Math.min(1, Math.max(0, pos));
-        return this._clampSpeedX(this.MIN_SPEEDX * Math.pow(this.MAX_SPEEDX / this.MIN_SPEEDX, p));
-    }
-    _speedXToPos(x) {
-        const sx = this._clampSpeedX(x);
-        return Math.log(sx / this.MIN_SPEEDX) / Math.log(this.MAX_SPEEDX / this.MIN_SPEEDX);
-    }
-
-    // Apply a new "x real-time" speed. This sets the pause divisor used by the play
-    // loop and nothing else: the per-cluster materialization keeps its base timing at
-    // every speed. Scaling the animation with the speed (as an earlier version did)
-    // made clusters snap in ~10x faster than designed at the default speed, which read
-    // as jittery and disconnected from the rest of the visualization.
-    applyTimelineSpeed(sx) {
-        this.speedX = this._clampSpeedX(sx);
-        if (this.animationEngine) {
-            this.animationEngine.setSpeed(1);
+    startScheduledEvent(index) {
+        this.animationEngine.applyEventInstant(index - 1);
+        this.currentEventIndex = index;
+        const duration = this.playbackPlan.animationDurations[index];
+        if (duration > 0) {
+            this.animationEngine.setSpeed(this.animationEngine.baseMergeDuration / duration);
+            this.animationEngine.playEvent(index);
+        } else {
+            this.animationEngine.applyEventInstant(index);
         }
-        // Keep the slider thumb in sync (e.g. after the auto-pick on load, or when a
-        // different dataset picks a different default).
-        const slider = document.getElementById('slider-timeline-speed');
-        if (slider) slider.value = this._speedXToPos(this.speedX);
-        this.updateSpeedReadout();
-    }
-
-    // Update the "≈ 180× real-time · ~45s" label beside the speed slider.
-    updateSpeedReadout() {
-        const el = document.getElementById('val-timeline-speed');
-        if (!el) return;
-        const sx = this.speedX || 1;
-        const vizDur = this._estimatePlaybackSec(sx);
-        // Each event takes max(animation, gap/speedX), so once the requested speed
-        // compresses gaps below the animation duration the animation floor governs and
-        // the build cannot actually run at sx. Report the rate the viewer will really
-        // see rather than the number the slider asked for.
-        const effective = vizDur > 0 ? (this.realSpanSec || 0) / vizDur : sx;
-        const shown = Math.min(sx, Math.max(1, effective));
-        const factor = shown <= 1.001 ? '1\u00d7 (real-time)' : `\u2248 ${this._fmtMult(shown)} real-time`;
-        el.textContent = `${factor} \u00b7 ~${this._fmtDur(vizDur)}`;
-    }
-
-    // Wall-clock length of a full play-through at speed `sx`, honoring the fact that
-    // an event can never be shorter than its materialization animation.
-    _estimatePlaybackSec(sx) {
-        const animDur = this.animationEngine?.baseMergeDuration || 0.8;
-        const events = this.events || [];
-        if (!events.length) return 0;
-        let total = 0;
-        for (const e of events) {
-            const gap = typeof e.realGapSec === 'number' ? e.realGapSec / sx : 0;
-            total += Math.max(animDur, gap);
+        for (const animation of this.animationEngine.activeAnimations) {
+            animation.startTime = this.playbackPlan.starts[index] * 1000;
         }
-        return total;
+        this.frustumEngine.syncToEventIndex(this.events, index);
+        this.fitCameraToVisible();
+        this.updateUI();
     }
 
-    _fmtMult(x) {
-        if (x >= 100) return Math.round(x / 10) * 10 + '\u00d7';
-        if (x >= 10) return Math.round(x) + '\u00d7';
-        return x.toFixed(1) + '\u00d7';
+    seekPlayback(seconds) {
+        this.playback.seek(seconds, performance.now() / 1000);
+        this.undoFinalView();
+        this.startScheduledEvent(this.playbackPlan.indexAt(this.playback.elapsed));
+        this.animationEngine.update(0);
+        this.updatePlaybackClock();
     }
 
-    _fmtDur(sec) {
-        if (sec >= 3600) return (sec / 3600).toFixed(1) + 'h';
-        if (sec >= 90) return Math.round(sec / 60) + 'm';
-        return Math.round(sec) + 's';
+    advancePlayback(now) {
+        if (!this.playback) return;
+        this.playback.update(now);
+        if (this.playback.elapsed >= this.playback.duration) {
+            if (!this.finalViewActive) {
+                this.currentEventIndex = this.events.length - 1;
+                this.animationEngine.applyEventInstant(this.currentEventIndex);
+                this.frustumEngine.syncToEventIndex(this.events, this.currentEventIndex);
+                this.isPlaying = false;
+                this.ui.playBtn.textContent = 'Play';
+                this.updateUI();
+                this.collapseToFinalView();
+            }
+        } else {
+            const index = this.playbackPlan.indexAt(this.playback.elapsed);
+            if (index !== this.currentEventIndex) this.startScheduledEvent(index);
+        }
+        this.updatePlaybackClock();
     }
 
     togglePlay() {
-        this.isPlaying = !this.isPlaying;
-        this.ui.playBtn.textContent = this.isPlaying ? 'Pause' : 'Play';
-        
-        if (this.isPlaying && this.currentEventIndex >= this.events.length - 1) {
-            this.jumpTo(0);
+        if (!this.playback || !this.events.length) return;
+        const now = performance.now() / 1000;
+        if (this.isPlaying) {
+            this.playback.pause(now);
+            this.isPlaying = false;
+        } else {
+            if (this.playback.elapsed >= this.playback.duration) this.seekPlayback(0);
+            this.playback.play(now);
+            this.isPlaying = true;
         }
+        this.ui.playBtn.textContent = this.isPlaying ? 'Pause' : 'Play';
+        this.updatePlaybackClock();
     }
 
     toggleRecording() {
@@ -1346,7 +1312,7 @@ export class VGGTHierarchyApp {
         const count = this.events.length;
         if (count === 0) return;
         
-        const progress = (this.currentEventIndex / (count - 1)) * 100;
+        const progress = count > 1 ? (this.currentEventIndex / (count - 1)) * 100 : 0;
         this.ui.progressBar.style.width = `${progress}%`;
         
         const event = this.events[this.currentEventIndex];
@@ -1359,6 +1325,7 @@ export class VGGTHierarchyApp {
         }
         this.ui.eventLabel.textContent = label;
         this.updateAnnotation();
+        this.updatePlaybackClock();
         
         let visiblePoints = 0;
         let visibleClusters = 0;
@@ -1437,52 +1404,7 @@ export class VGGTHierarchyApp {
 
         if (this.flowMode) updateFlowTime(time);
 
-        if (this.isPlaying) {
-            if (!this.lastStepTime) this.lastStepTime = time;
-            const hasActiveAnims = this.animationEngine && this.animationEngine.activeAnimations.length > 0;
-            if (hasActiveAnims) {
-                this.hadActiveAnims = true;
-            } else if (this.hadActiveAnims) {
-                this.hadActiveAnims = false;
-                this.lastAnimEndTime = time;
-            }
-            // Time the gap from when the event was triggered, not from when its
-            // animation settled, so a cluster's materialization plays *inside* its
-            // real-time gap instead of being added on top of it. Combined with the
-            // hasActiveAnims guard below, an event lands at
-            // max(animation duration, real gap / speedX): the animation keeps its
-            // full base duration, and real timing governs everything longer.
-            const ref = this.lastStepTime;
-            const nextIdx = this.currentEventIndex + 1;
-            const nextEvent = nextIdx < this.events.length ? this.events[nextIdx] : null;
-            // Pace by the REAL gap before the next event, in "x real-time": the
-            // pause is the real seconds divided by speedX. At speedX=1 this is
-            // literally real-time; higher speedX compresses it. Long compute pauses
-            // read as pauses; bursts fire back-to-back. Falls back to the legacy
-            // per-event delay when a dataset has no timestamps.
-            const sx = this.speedX || 1;
-            let delay;
-            if (nextEvent && typeof nextEvent.realGapSec === 'number') {
-                delay = nextEvent.realGapSec / sx;
-            } else {
-                delay = (nextEvent && nextEvent.delay ? nextEvent.delay : 0.12);
-            }
-            if (!hasActiveAnims && time - ref > delay) {
-                if (this.currentEventIndex < this.events.length - 1) {
-                    this.step(1);
-                    this.lastStepTime = time;
-                } else {
-                    if (!this.finalViewActive) {
-                        this.collapseToFinalView();
-                    }
-                    this.togglePlay();
-                }
-            }
-        } else {
-            this.lastStepTime = 0;
-            this.lastAnimEndTime = 0;
-            this.hadActiveAnims = false;
-        }
+        this.advancePlayback(time);
 
         if (this.cameraAnimTarget) {
             const elapsed = time - this.cameraAnimStart;

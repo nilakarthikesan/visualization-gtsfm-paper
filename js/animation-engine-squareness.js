@@ -18,6 +18,7 @@ export class SquarenessAnimationEngine {
         this.mergeDuration = this.baseMergeDuration;
         this.leafConvergeDuration = this.baseConvergeDuration;
         this.speed = 1;
+        this.now = () => performance.now();
 
         this.particleEngine = null;
         this.convergenceEngine = null;
@@ -352,7 +353,7 @@ export class SquarenessAnimationEngine {
             type: 'converge',
             cluster,
             convergenceData: data,
-            startTime: performance.now(),
+            startTime: this.now(),
             duration: this.leafConvergeDuration * 1000,
             onComplete: () => {
                 this.convergenceEngine.settleClusterInstant(cluster);
@@ -520,7 +521,7 @@ export class SquarenessAnimationEngine {
             mergedCluster: merged,
             childPaths: evt.children,
             fadingChildren,
-            startTime: performance.now(),
+            startTime: this.now(),
             duration: this.mergeDuration * 1000,
             onComplete: () => {
                 this.preMatchedCloud.visible = false;
@@ -561,8 +562,8 @@ export class SquarenessAnimationEngine {
         cluster.pointCloud.material.transparent = true;
         this.activeAnimations.push({
             type: 'fadeIn', cluster,
-            startTime: performance.now(),
-            duration: 500
+            startTime: this.now(),
+            duration: this.mergeDuration * 1000
         });
     }
 
@@ -571,8 +572,8 @@ export class SquarenessAnimationEngine {
         cluster.pointCloud.material.transparent = true;
         this.activeAnimations.push({
             type: 'fadeOut', cluster,
-            startTime: performance.now(),
-            duration: 500,
+            startTime: this.now(),
+            duration: this.mergeDuration * 1000,
             onComplete: () => {
                 cluster.pointCloud.visible = false;
                 cluster.pointCloud.material.uniforms.uOpacity.value = 1;
@@ -605,7 +606,7 @@ export class SquarenessAnimationEngine {
     }
 
     update(dt) {
-        const now = performance.now();
+        const now = this.now();
         const swirlTime = this.flowEnabled ? (now / 1000) * this.flowSpeed : 0;
         for (let i = this.activeAnimations.length - 1; i >= 0; i--) {
             const a = this.activeAnimations[i];
