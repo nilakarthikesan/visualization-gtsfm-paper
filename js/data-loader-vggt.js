@@ -12,6 +12,7 @@ export const DATASETS = {
     // The standalone "original" Gerrard Hall dataset is not part of the Brussels
     // deliverable and its data is excluded from the hosted build, so it is not offered.
     BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
+    THANJAVUR: { label: 'Thanjavur (temple)', sceneName: 'Thanjavur (Brihadeeswarar Temple)', basePath: 'data/thanjavur-vggt', useManifest: true, pointScale: 0.4 },
     C_1: { label: 'C_1 (deep tree)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_1', useManifest: true, pointScale: 0.4 },
     C_2: { label: 'C_2', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_2', useManifest: true, pointScale: 0.4 },
     C_3: { label: 'C_3', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_3', useManifest: true, pointScale: 0.4 }
@@ -232,6 +233,14 @@ export class VGGTDataLoader {
             const colors = [];
             let hasRealColor = false;
 
+            // Reject numerically diverged points. Some intermediate GTSFM merges (bundle
+            // adjustment can blow up) export a large fraction of points at astronomically
+            // large coordinates (1e18..1e75). A single such point poisons the global
+            // bounds so scaleFactor -> 0 and the ENTIRE scene collapses to the origin.
+            // VGGT/COLMAP metric coords are ~unit scale, so anything past OUTLIER_CAP is
+            // non-physical divergence, not signal, and is dropped here.
+            const OUTLIER_CAP = 1e7;
+
             const lines = text.split('\n');
             for (let line of lines) {
                 if (line.startsWith('#') || line.trim() === '') continue;
@@ -242,6 +251,8 @@ export class VGGTDataLoader {
                 const x = parseFloat(parts[1]);
                 const y = parseFloat(parts[2]);
                 const z = parseFloat(parts[3]);
+                if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+                if (Math.abs(x) > OUTLIER_CAP || Math.abs(y) > OUTLIER_CAP || Math.abs(z) > OUTLIER_CAP) continue;
                 const r = parseInt(parts[4]);
                 const g = parseInt(parts[5]);
                 const b = parseInt(parts[6]);
@@ -353,22 +364,34 @@ export class VGGTDataLoader {
         }
         
         const mergedCluster = this.clusters.get('merged');
+        // Bounds of the canonical root ("merged") cluster, gathered alongside its mean.
+        let rootBounds = null; // [minX, maxX, minY, maxY, minZ, maxZ]
         if (mergedCluster && mergedCluster.pointCloud && mergedCluster.pointCloud.geometry) {
             const pos = mergedCluster.pointCloud.geometry.attributes.position;
             let sumX = 0, sumY = 0, sumZ = 0;
+            let mnX = Infinity, mxX = -Infinity, mnY = Infinity, mxY = -Infinity, mnZ = Infinity, mxZ = -Infinity;
             for (let i = 0; i < pos.count; i++) {
-                sumX += pos.getX(i);
-                sumY += pos.getY(i);
-                sumZ += pos.getZ(i);
+                const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+                sumX += x; sumY += y; sumZ += z;
+                if (x < mnX) mnX = x; if (x > mxX) mxX = x;
+                if (y < mnY) mnY = y; if (y > mxY) mxY = y;
+                if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z;
             }
             this.globalCenter.set(sumX / pos.count, sumY / pos.count, sumZ / pos.count);
+            rootBounds = [mnX, mxX, mnY, mxY, mnZ, mxZ];
         } else {
             this.globalCenter.set((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
         }
         
-        const sizeX = maxX - minX;
-        const sizeY = maxY - minY;
-        const sizeZ = maxZ - minZ;
+        // Base the shared world scale on the canonical root cluster, which is always in
+        // the final aligned, sanely-scaled frame. Intermediate merges can live in wildly
+        // different local gauges (or diverge); using the global min/max would let one such
+        // cluster shrink the whole scene toward a point. Per-cluster tile fitting is
+        // scale-independent, so this only sets the world scale used for point/frustum sizing.
+        const rb = rootBounds || [minX, maxX, minY, maxY, minZ, maxZ];
+        const sizeX = rb[1] - rb[0];
+        const sizeY = rb[3] - rb[2];
+        const sizeZ = rb[5] - rb[4];
         this.globalRadius = Math.sqrt(sizeX*sizeX + sizeY*sizeY + sizeZ*sizeZ) / 2;
         
         const TARGET_SIZE = 300;

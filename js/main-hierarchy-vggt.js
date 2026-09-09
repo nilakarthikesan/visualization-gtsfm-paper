@@ -4,10 +4,10 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=50';
+import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=52';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=50';
 import { InteractionEngine } from './interaction-engine.js?v=6';
-import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=45';
+import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=47';
 import { CameraEngine } from './camera-engine.js?v=40';
 import { updatePointScale, applyBlendMode, BLEND_MODES, updateFlowTime, setFlowParams, setPointSizeScale } from './point-material.js?v=46';
 import { FrustumEngine } from './frustum-engine.js?v=38';
@@ -838,19 +838,23 @@ class VGGTHierarchyApp {
             this.events = this.animationEngine.initTimeline();
             this.currentEventIndex = 0;
 
-            // realSpanSec = total (artifact-capped) real seconds of the run = the
-            // effective real duration we honor. At speedX the inter-event pauses are
-            // realGap/speedX, so this drives both the default speed and the readout.
+            // realSpanSec = total real seconds of computation we replay (idle stalls
+            // already collapsed by the animation engine). At speedX the inter-event
+            // pauses are realGap/speedX, so this drives the default speed and readout.
             this.realSpanSec = 0;
             for (const e of this.events) {
                 this.realSpanSec += (typeof e.realGapSec === 'number' ? e.realGapSec : 0);
             }
-            // Auto-pick a compressed default the first time (no saved preference):
-            // speedX so the run plays in ~TARGET_VIZ_SEC (minus the ~fast anim floor).
+            // Auto-pick a compressed default the first time (no saved preference).
+            // Every event costs at least one materialization animation, so that floor
+            // sets the shortest possible play-through; aim for TARGET_VIZ_SEC but never
+            // ask for a speed the floor makes unreachable (which would only misreport
+            // the rate while looking identical).
             if (!this.speedX || this.speedX < this.MIN_SPEEDX) {
-                const animFloor = this.events.length * 0.08;
-                const denom = Math.max(5, this.TARGET_VIZ_SEC - animFloor);
-                this.speedX = this._clampSpeedX(this.realSpanSec / denom);
+                const animFloor = this.events.length *
+                    (this.animationEngine.baseMergeDuration || 0.8);
+                const target = Math.max(this.TARGET_VIZ_SEC, animFloor * 1.25);
+                this.speedX = this._clampSpeedX(this.realSpanSec / target);
             }
             this.applyTimelineSpeed(this.speedX);
 
@@ -1400,14 +1404,15 @@ class VGGTHierarchyApp {
         return Math.log(sx / this.MIN_SPEEDX) / Math.log(this.MAX_SPEEDX / this.MIN_SPEEDX);
     }
 
-    // Apply a new "x real-time" speed: sets the pause divisor (used by the play
-    // loop) and scales the materialization animations so faster speeds are snappier
-    // while true real-time keeps the leisurely base timing.
+    // Apply a new "x real-time" speed. This sets the pause divisor used by the play
+    // loop and nothing else: the per-cluster materialization keeps its base timing at
+    // every speed. Scaling the animation with the speed (as an earlier version did)
+    // made clusters snap in ~10x faster than designed at the default speed, which read
+    // as jittery and disconnected from the rest of the visualization.
     applyTimelineSpeed(sx) {
         this.speedX = this._clampSpeedX(sx);
         if (this.animationEngine) {
-            const animMult = Math.min(10, Math.max(1, this.speedX / 8));
-            this.animationEngine.setSpeed(animMult);
+            this.animationEngine.setSpeed(1);
         }
         // Keep the slider thumb in sync (e.g. after the auto-pick on load, or when a
         // different dataset picks a different default).
@@ -1421,12 +1426,29 @@ class VGGTHierarchyApp {
         const el = document.getElementById('val-timeline-speed');
         if (!el) return;
         const sx = this.speedX || 1;
-        const N = this.events ? this.events.length : 0;
-        const animMult = Math.min(10, Math.max(1, sx / 8));
-        const animDur = (this.animationEngine?.baseMergeDuration || 0.8) / animMult;
-        const vizDur = (this.realSpanSec || 0) / sx + N * animDur;
-        const factor = sx <= 1.001 ? '1\u00d7 (real-time)' : `\u2248 ${this._fmtMult(sx)} real-time`;
+        const vizDur = this._estimatePlaybackSec(sx);
+        // Each event takes max(animation, gap/speedX), so once the requested speed
+        // compresses gaps below the animation duration the animation floor governs and
+        // the build cannot actually run at sx. Report the rate the viewer will really
+        // see rather than the number the slider asked for.
+        const effective = vizDur > 0 ? (this.realSpanSec || 0) / vizDur : sx;
+        const shown = Math.min(sx, Math.max(1, effective));
+        const factor = shown <= 1.001 ? '1\u00d7 (real-time)' : `\u2248 ${this._fmtMult(shown)} real-time`;
         el.textContent = `${factor} \u00b7 ~${this._fmtDur(vizDur)}`;
+    }
+
+    // Wall-clock length of a full play-through at speed `sx`, honoring the fact that
+    // an event can never be shorter than its materialization animation.
+    _estimatePlaybackSec(sx) {
+        const animDur = this.animationEngine?.baseMergeDuration || 0.8;
+        const events = this.events || [];
+        if (!events.length) return 0;
+        let total = 0;
+        for (const e of events) {
+            const gap = typeof e.realGapSec === 'number' ? e.realGapSec / sx : 0;
+            total += Math.max(animDur, gap);
+        }
+        return total;
     }
 
     _fmtMult(x) {
@@ -1641,7 +1663,13 @@ class VGGTHierarchyApp {
                 this.hadActiveAnims = false;
                 this.lastAnimEndTime = time;
             }
-            const ref = Math.max(this.lastStepTime, this.lastAnimEndTime || 0);
+            // Time the gap from when the event was triggered, not from when its
+            // animation settled, so a cluster's materialization plays *inside* its
+            // real-time gap instead of being added on top of it. Combined with the
+            // hasActiveAnims guard below, an event lands at
+            // max(animation duration, real gap / speedX): the animation keeps its
+            // full base duration, and real timing governs everything longer.
+            const ref = this.lastStepTime;
             const nextIdx = this.currentEventIndex + 1;
             const nextEvent = nextIdx < this.events.length ? this.events[nextIdx] : null;
             // Pace by the REAL gap before the next event, in "x real-time": the

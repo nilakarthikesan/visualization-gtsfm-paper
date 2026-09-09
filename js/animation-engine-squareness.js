@@ -8,8 +8,10 @@ export class SquarenessAnimationEngine {
         this.worldGroup = worldGroup;
         this.mergeEvents = [];
         this.activeAnimations = [];
-        // Base (1x) animation durations. Live playback speed scales these via
-        // setSpeed() so the whole build gets snappier/slower together.
+        // Materialization durations for a single cluster/merge. These are a fixed
+        // look-and-feel choice and are deliberately NOT tied to the timeline speed:
+        // the speed slider controls how much real computation time is compressed
+        // between events, not how fast a cluster forms once it starts.
         this.baseMergeDuration = 0.8;
         this.baseConvergeDuration = 0.8;
         this.mergeDuration = this.baseMergeDuration;
@@ -129,8 +131,35 @@ export class SquarenessAnimationEngine {
         const hasTimestamps = allEvents.some(e => e.timestamp > 0);
 
         if (hasTimestamps) {
+            // Topological-safe timing. A merge cannot complete before its inputs
+            // exist, but raw file mtimes for deep single-child chains can put a
+            // parent slightly BEFORE its child. applyEventInstant hides a merge's
+            // children when the merge is processed, so if a child were ordered AFTER
+            // its parent it would be re-shown and never hidden again -> ghost clouds
+            // stranded at huge offsets in the final view. We derive an
+            // effectiveTime = max(own timestamp, latest descendant time) so every
+            // parent is ordered strictly after all of its descendants, while
+            // preserving the real gaps wherever the timestamps are already
+            // tree-consistent. This is dataset-agnostic (fixes any merge tree).
+            const pathToEvent = new Map(allEvents.map(e => [e.path, e]));
+            const effCache = new Map();
+            const effTime = (e) => {
+                if (effCache.has(e.path)) return effCache.get(e.path);
+                let t = e.timestamp || 0;
+                for (const cp of e.children) {
+                    const ce = pathToEvent.get(cp);
+                    if (ce) t = Math.max(t, effTime(ce));
+                }
+                effCache.set(e.path, t);
+                return t;
+            };
+            for (const e of allEvents) e.effTime = effTime(e);
+
             allEvents.sort((a, b) => {
-                if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+                if (a.effTime !== b.effTime) return a.effTime - b.effTime;
+                // Same effective time: deeper (child) before shallower (parent) so a
+                // merge never precedes a descendant; leaves before merges; then path.
+                if (a.depth !== b.depth) return b.depth - a.depth;
                 if (a.isLeaf !== b.isLeaf) return a.isLeaf ? -1 : 1;
                 return a.cluster.path.localeCompare(b.cluster.path);
             });
@@ -144,21 +173,42 @@ export class SquarenessAnimationEngine {
             // live speed slider, so long compute pauses (e.g. bundle adjustment)
             // feel long and quick VGGT bursts feel quick.
             //
-            // GAP_CAP guards against mtime artifacts: exported subtrees can carry a
-            // file-modified time hours/days apart (a bogus inter-section jump). We
-            // cap any single gap so those artifacts become a bounded "section
-            // pause" rather than dead time, while every real intra-section gap
-            // (which matches Kathir's real_time_s exactly) is preserved.
-            const GAP_CAP_SEC = 300;
+            // One thing the wall clock includes that we do not want is idle time:
+            // Dask sometimes sits between subtrees without computing anything (the
+            // Brussels run has a single 17.4h overnight stall against a 20s median
+            // gap). Those stalls are not computation, so replaying them is dead air,
+            // but every other long gap IS real work (a 373s VGGT pass should feel
+            // ~2.6x longer than a 140s one) and must survive.
+            //
+            // So instead of one hardcoded ceiling, derive the stall threshold from
+            // the run's own gap distribution: a stall is an extreme outlier well
+            // beyond the 95th percentile of normal gaps. This adapts per dataset,
+            // which matters because Thanjavur's longest real gap (410s) exceeds the
+            // ceiling a Brussels-tuned constant would have imposed.
+            const rawGaps = [];
+            for (let i = 1; i < allEvents.length; i++) {
+                rawGaps.push(Math.max(0, allEvents[i].effTime - allEvents[i - 1].effTime));
+            }
+            const sorted = [...rawGaps].sort((a, b) => a - b);
+            const p95 = sorted.length ? sorted[Math.floor(sorted.length * 0.95)] : 0;
+            const stallSec = Math.max(60, p95 * 3);
+            // A stall is rendered as the longest *genuine* gap in the run, so the
+            // build never sits idle longer than its slowest real computation did.
+            const longestReal = sorted.filter(g => g <= stallSec).pop() || stallSec;
 
             for (let i = 0; i < allEvents.length; i++) {
                 if (i === 0) {
                     allEvents[i].realGapSec = 0;
                 } else {
-                    const raw = allEvents[i].timestamp - allEvents[i - 1].timestamp;
-                    allEvents[i].realGapSec = Math.max(0, Math.min(raw, GAP_CAP_SEC));
+                    const raw = rawGaps[i - 1];
+                    allEvents[i].wasStall = raw > stallSec;
+                    allEvents[i].realGapSec = allEvents[i].wasStall ? longestReal : raw;
                 }
             }
+            const stalls = allEvents.filter(e => e.wasStall).length;
+            console.log(`Timeline pacing: p95 gap ${p95.toFixed(0)}s, stall threshold ` +
+                        `${stallSec.toFixed(0)}s, ${stalls} idle stall(s) shown as ` +
+                        `${longestReal.toFixed(0)}s (longest real gap)`);
 
             // Legacy per-event delay (used for manual stepping / non-play fallback).
             for (let i = 0; i < allEvents.length; i++) {
