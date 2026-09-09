@@ -236,7 +236,9 @@ test('Gerrard Hall selection loads its own data and completes its nine-event hie
     try {
         const loader = new VGGTDataLoader('original');
         assert.equal(loader.dataset.sceneName, 'Gerrard Hall');
+        loader.computePointMatching = () => { throw new Error('Loading must not compute matches'); };
         const clusters = await loader.load();
+        assert.ok([...clusters.values()].every(c => !c.matchData));
         const world = new THREE.Group();
         const frustums = new FrustumEngine(world);
         await frustums.loadForClusters(clusters, loader);
@@ -269,6 +271,8 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
     try {
         const loader = new VGGTDataLoader('BRUSSELS');
         const clusters = await loader.load();
+        assert.ok([...clusters.values()].every(c => !c.matchData));
+        loader.computePointMatching(); // Explicit preparation for trajectory assertions below.
         const world = new THREE.Group();
         const frustums = new FrustumEngine(world);
         await frustums.loadForClusters(clusters,loader);

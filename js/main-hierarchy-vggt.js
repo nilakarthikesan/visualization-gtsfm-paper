@@ -5,7 +5,8 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=55';
+import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=56';
+import { MatchingCoordinator, matchingPriorities } from './matching-coordinator.js?v=1';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
 import { LayoutGuides } from './layout-guides.js?v=3';
 import { bindRegionClip } from './region-clipping.js?v=1';
@@ -810,6 +811,18 @@ export class VGGTHierarchyApp {
             }
 
             console.log(`Loaded ${loadedCount}/${clusters.size} clusters with point data`);
+
+            // Snapshot normalized positions before any reveal can change geometry.
+            this.matchingCoordinator?.dispose();
+            this.matchingCoordinator = new MatchingCoordinator(clusters);
+            this.matchingCoordinator.initialize();
+            if (!this._matchingPageHide) {
+                this._matchingPageHide = event => {
+                    // A back/forward-cache entry keeps its worker and dataset alive.
+                    if (!event.persisted) this.matchingCoordinator?.dispose();
+                };
+                window.addEventListener('pagehide', this._matchingPageHide);
+            }
         
             for (const cluster of clusters.values()) {
                 this.worldGroup.add(cluster.group);
@@ -849,6 +862,7 @@ export class VGGTHierarchyApp {
             this.playbackPlan = planPlayback(this.events, this.TARGET_VIZ_SEC);
             this.playback = new PlaybackClock(this.playbackPlan.duration);
             this.animationEngine.now = () => this.playback.elapsed * 1000;
+            this.refreshMatching();
 
             const leafClusters = this.animationEngine.getLeafClusters();
             this.convergenceEngine.prepareAllLeaves(leafClusters);
@@ -929,6 +943,7 @@ export class VGGTHierarchyApp {
             this.animate();
             
         } catch (err) {
+            this.matchingCoordinator?.dispose();
             console.error("App Start Error:", err);
             this.ui.loadingText.innerHTML = `<span style="color: #ff4444">Error starting app:<br>${err.message}</span>`;
         }
@@ -1076,12 +1091,14 @@ export class VGGTHierarchyApp {
         }
         this.currentEventIndex = index;
         this.animationEngine.applyEventInstant(index);
+        this.refreshMatching(index, false);
         this.frustumEngine.syncToEventIndex(this.events, index);
         this.fitCameraToVisible();
         this.updateUI();
     }
 
     collapseToFinalView() {
+        this.matchingCoordinator?.prioritize([]);
         this.finalViewActive = true;
         const sceneName = DATASETS[this.datasetKey]?.sceneName || 'the reconstruction';
         this.ui.eventLabel.textContent = `Assembled Reconstruction — ${sceneName}`;
@@ -1159,7 +1176,14 @@ export class VGGTHierarchyApp {
         if (this.ui.progressBar) this.ui.progressBar.style.width = (elapsed / this.playback.duration * 100) + '%';
     }
 
+    refreshMatching(index = this.currentEventIndex, includeCurrent = true) {
+        if (!this.matchingCoordinator || !this.playbackPlan) return;
+        const unfinished = includeCurrent && this.playback.elapsed < this.playbackPlan.ends[index];
+        this.matchingCoordinator.prioritize(matchingPriorities(this.events, this.playbackPlan, index, unfinished));
+    }
+
     startScheduledEvent(index) {
+        this.refreshMatching(index);
         this.animationEngine.applyEventInstant(index - 1);
         this.currentEventIndex = index;
         const duration = this.playbackPlan.animationDurations[index];
@@ -1213,6 +1237,7 @@ export class VGGTHierarchyApp {
             this.isPlaying = false;
         } else {
             if (this.playback.elapsed >= this.playback.duration) this.seekPlayback(0);
+            this.refreshMatching();
             this.playback.play(now);
             this.isPlaying = true;
         }

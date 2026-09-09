@@ -38,6 +38,13 @@ event gaps are scaled directly with no minimum delay; animations shorten to fit.
 The live run clock shows accelerated elapsed time alongside the 30-second playback
 counter. Pause freezes both clocks and animations; scrubbing moves them together.
 
+Point matching runs in a background worker using stable reconstruction coordinates,
+with lookahead for the next two animated merges. Loading and playback never wait
+for matches: a merge whose matches are not ready uses a crossfade in its assigned
+regions, keeping the 30-second schedule (including during recording). Completed
+matches are cached for replay until the viewer reloads. Seeking reprioritizes pending
+work; if workers are unavailable, the viewer continues with crossfades.
+
 **Show Reserved Regions** is on by default, with boundaries colored by tree depth. **Show Node Labels** is opt-in. Cells fit the central 95% of points and cameras; the planner considers reconstruction shapes at every merge stage to reduce unused space. **Lock Final Frame** keeps the completed reconstruction’s frame throughout playback. Home/End jump to the first/final event. Click anywhere on the timeline bar to jump to an event. Mouse drag orbits, scroll zooms, right-click drag pans.
 
 ## Point colors
@@ -125,7 +132,8 @@ reconstructed successfully, so it should not be shown.
 
 ## Architecture
 
-- `js/data-loader-vggt.js` - Dataset registry, point cloud + camera loading, scene orientation from COLMAP poses, spatial-hash point matching between merge levels, fallback coloring
+- `js/data-loader-vggt.js` - Dataset registry, point cloud + camera loading, scene orientation from COLMAP poses, fallback coloring
+- `js/point-matching.js` / `js/point-matching-worker.js` / `js/matching-coordinator.js` - Spatial-hash matching, background computation, and cached merge lookahead
 - `js/layout-engine-squareness.js` / `js/recursive-floorplan.js` - Final-frame layout with geometry-aware recursive packing
 - `js/layout-guides.js` / `js/region-clipping.js` - Optional reserved-region guides and fragment containment
 - `js/animation-engine-squareness.js` - Timeline system with per-point merge interpolation
