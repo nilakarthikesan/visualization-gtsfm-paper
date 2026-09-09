@@ -1,8 +1,9 @@
 # Final-frame reconstruction layout
 
 The viewer plans the final merged reconstruction first, reserves rectangles for
-its descendants, and replays the merge timeline inside that fixed frame. Enable
-**Show Reserved Regions**, or use `?regions=1`, to inspect the allocation.
+its descendants, and replays the merge timeline inside that fixed frame.
+**Show Reserved Regions** is enabled by default and remembers an explicit opt-out;
+`?regions=1` / `?regions=0` override the saved setting.
 **Lock Final Frame** is enabled by default; `?camera=fixed` overrides saved settings.
 Turning it off opts into framing the currently visible clusters.
 
@@ -21,8 +22,14 @@ shared blue-scale legend. The scale adapts to light/dark themes.
   contributes a unit-area footprint, avoiding comparisons between different SfM
   coordinate scales. Candidate pruning keeps this bounded (32 aspect-diverse
   envelopes per subtree); this is a heuristic, not a globally optimal packing.
-- The selected plan balances the requirements of descendants, not just the next
-  cut. Short children retain their footprint shape rather than stretching into
+  Plans score the geometric mean of fitted footprint areas across all stages,
+  weighting each merge by its descendant leaf count. This gives wide merged
+  reconstructions a say in the split directions instead of optimizing only the
+  space occupied by leaves and leaving later reconstructions in tall cells.
+  The final candidate selection scores actual viewport allocations, including
+  their aspect changes, rather than just the hypothetical packing envelopes.
+- The selected plan balances the shapes of merges and descendants. Short
+  children retain their footprint shape rather than stretching into
   long bands beside deep subtrees. Some parent space therefore remains empty.
   Unary merges inherit the parent's rectangle without introducing another split.
 - Each reconstruction fits inside its explicit rectangle. Parent rectangles are

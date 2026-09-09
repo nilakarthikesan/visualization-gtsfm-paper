@@ -132,6 +132,14 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
         layout.computeLayout();
         const root = clusters.get('merged');
         assert.equal(layout.treeNodes.length,93);
+        // This wide, intermediate reconstruction previously inherited a tall
+        // cell: its footprint occupied only about 24% of the reserved area.
+        // Score merge stages as well as leaves, without changing the geometry.
+        const wideMerge = clusters.get('C_1/C_1_1/merged');
+        const footprintAspect = wideMerge.layoutExtent.w / wideMerge.layoutExtent.h;
+        const cellAspect = wideMerge.rect.w / wideMerge.rect.h;
+        assert.ok(Math.min(cellAspect / footprintAspect, footprintAspect / cellAspect) > .75,
+            'wide merged reconstruction still inherits a tall cell');
         const engine = new SquarenessAnimationEngine(clusters,layout,world);
         const events = engine.initTimeline();
         const convergence = new ConvergenceEngine();

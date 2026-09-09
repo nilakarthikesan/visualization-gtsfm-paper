@@ -5,7 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=53';
-import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=52';
+import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
 import { LayoutGuides } from './layout-guides.js?v=2';
 import { bindRegionClip } from './region-clipping.js?v=1';
 import { InteractionEngine } from './interaction-engine.js?v=6';
@@ -114,8 +114,9 @@ export class VGGTHierarchyApp {
         this.realSpanSec = 0;           // sum of (capped) real seconds between events
         // Hold the final composition for the entire timeline. Follow remains opt-in.
         this.fixedFrame = localStorage.getItem('gh-fixed-frame') !== 'false';
-        this.showLayoutGuides = new URLSearchParams(window.location.search).get('regions') === '1'
-            || localStorage.getItem('gh-layout-guides') === 'true';
+        const regions = new URLSearchParams(window.location.search).get('regions');
+        this.showLayoutGuides = regions === '1' || (regions !== '0'
+            && localStorage.getItem('gh-layout-guides') !== 'false');
         this.showNodeLabels = localStorage.getItem('gh-node-labels') === 'true';
         try {
             const p = new URLSearchParams(window.location.search);

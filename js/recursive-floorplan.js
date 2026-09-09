@@ -1,32 +1,44 @@
-// Plan from the leaves' shape requirements, then assign rectangles from the root
+// Plan from every reconstruction's shape, then assign rectangles from the root
 // down. A candidate records a complete slicing plan, not just the next split.
 // Normalizing each footprint to unit area avoids comparing unrelated SfM gauges.
 export function planFloorplan(root, aspectOf, rootRect) {
+    // Maximize the geometric mean of displayed footprint area at all stages,
+    // relative to the enclosing area. A merge represents all its descendant
+    // leaves, so weight it accordingly: many early leaves must not drown out
+    // the shape requirements of the few large, late reconstructions.
+    const quality = c => c.logAreaSum / c.weight - Math.log(c.w * c.h);
     const prune = candidates => {
         const bins = new Map();
         for (const c of candidates) {
             const key = Math.round(Math.log2(c.w / c.h) * 6);
             const prev = bins.get(key);
-            if (!prev || c.w * c.h < prev.w * prev.h) bins.set(key, c);
+            if (!prev || quality(c) > quality(prev)) bins.set(key, c);
         }
-        return [...bins.values()].sort((a, b) => a.w * a.h - b.w * b.h).slice(0, 32);
+        return [...bins.values()].sort((a, b) => quality(b) - quality(a)).slice(0, 32);
     };
     const build = node => {
         const aspect = Math.max(1e-6, aspectOf(node));
         const ownW = Math.sqrt(aspect), ownH = 1 / ownW;
-        if (!node.children.length) return [{ node, w: ownW, h: ownH }];
+        if (!node.children.length) return [{ node, w: ownW, h: ownH,
+            logAreaSum: 0, weight: 1, leafCount: 1 }];
         let packs = buildCached(node.children[0]);
         for (const child of node.children.slice(1)) {
             const next = [];
             for (const a of packs) for (const b of buildCached(child)) {
-                next.push({ axis: 'x', a, b, w: a.w + b.w, h: Math.max(a.h, b.h) });
-                next.push({ axis: 'y', a, b, w: Math.max(a.w, b.w), h: a.h + b.h });
+                const totals = { logAreaSum: a.logAreaSum + b.logAreaSum,
+                    weight: a.weight + b.weight, leafCount: a.leafCount + b.leafCount };
+                next.push({ ...totals, axis: 'x', a, b, w: a.w + b.w, h: Math.max(a.h, b.h) });
+                next.push({ ...totals, axis: 'y', a, b, w: Math.max(a.w, b.w), h: a.h + b.h });
             }
             packs = prune(next);
         }
-        return prune(packs.map(pack => ({
-            node, pack, w: Math.max(pack.w, ownW), h: Math.max(pack.h, ownH)
-        })));
+        return prune(packs.map(pack => {
+            const w = Math.max(pack.w, ownW), h = Math.max(pack.h, ownH);
+            const ownScale = Math.min(w / ownW, h / ownH);
+            return { node, pack, w, h, leafCount: pack.leafCount,
+                weight: pack.weight + pack.leafCount,
+                logAreaSum: pack.logAreaSum + pack.leafCount * 2 * Math.log(ownScale) };
+        }));
     };
     const cache = new Map();
     const buildCached = node => {
@@ -34,8 +46,6 @@ export function planFloorplan(root, aspectOf, rootRect) {
         return cache.get(node);
     };
     const candidates = buildCached(root);
-    const fit = c => Math.min(rootRect.w / c.w, rootRect.h / c.h);
-    const chosen = candidates.reduce((best, c) => fit(c) > fit(best) ? c : best);
     const rectangles = new Map();
     const assign = (c, available, inherit = false) => {
         // Do not stretch a short leaf into a band alongside a deep subtree.
@@ -62,6 +72,23 @@ export function planFloorplan(root, aspectOf, rootRect) {
             assign(c.b, { ...r, y: r.y + h, h: r.h - h });
         }
     };
-    assign(chosen, rootRect);
-    return rectangles;
+    // The viewport may stretch the envelope's cross-axis during assignment.
+    // Rank the surviving plans using their actual allocated rectangles, so a
+    // good hypothetical envelope cannot hide a poorly shaped on-screen cell.
+    let bestScore = -Infinity, bestRectangles;
+    for (const candidate of candidates) {
+        rectangles.clear();
+        assign(candidate, rootRect);
+        let score = 0;
+        for (const [node, r] of rectangles) {
+            const aspect = Math.max(1e-6, aspectOf(node));
+            const scale = Math.min(r.w / Math.sqrt(aspect), r.h * Math.sqrt(aspect));
+            score += cache.get(node)[0].leafCount * 2 * Math.log(scale);
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            bestRectangles = new Map(rectangles);
+        }
+    }
+    return bestRectangles;
 }
