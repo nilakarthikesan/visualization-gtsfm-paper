@@ -703,7 +703,7 @@
 
                     <div class="vs-section-label">Timeline</div>
                     <div class="vs-row">
-                        <span class="vs-hint">Automatic speed · 1 minute per dataset</span>
+                        <span class="vs-hint">Automatic speed · 30 seconds per dataset</span>
                     </div>
 
                     <div class="vs-section-label">Camera</div>
@@ -802,7 +802,7 @@
                     <div>Run elapsed <span id="clock-status"></span>
                         <span class="clock-value" id="run-clock">00:00:00.0</span></div>
                     <div class="playback-counter">Playback
-                        <span class="clock-value" id="playback-clock">00:00 / 01:00</span></div>
+                        <span class="clock-value" id="playback-clock">00:00 / 00:30</span></div>
                 </div>
                 <div class="controls-details">
                     <div class="progress-container" id="timeline-track">
@@ -836,21 +836,33 @@
 
     <div id="layout-guides" aria-hidden="true" hidden></div>
     <div id="layout-depth-legend" class="depth-legend" hidden>
-        <span>Root · 0</span><span class="depth-ramp"></span><span class="depth-end"></span>
+        <div class="depth-heading"><strong>Cluster depth</strong><span class="depth-end"></span></div>
+        <div class="depth-ramp"></div><div class="depth-ticks"></div>
     </div>
     <style>
         #layout-guides { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
-        .layout-region { position: absolute; box-sizing: border-box; border: 1px dashed rgb(var(--depth-color) / 0.5); }
+        .layout-region { position: absolute; box-sizing: border-box; border: 1px solid rgb(var(--depth-color) / 0.6); }
         .layout-region.arrived { border: 1px solid rgb(var(--depth-color) / 0.95);
             background: rgb(var(--depth-color) / 0.035); }
-        .layout-region.planned-parent { border-color: rgb(var(--depth-color) / 0.3); }
-        .depth-legend { position: fixed; left: 24px; top: 120px; width: 180px; z-index: 3;
-            display: flex; align-items: center; gap: 6px; pointer-events: none;
-            font: 10px sans-serif; color: #567; }
+        .layout-region.planned-parent { border-color: rgb(var(--depth-color) / 0.45); }
+        .depth-legend { position: fixed; left: 50%; top: 20px; transform: translateX(-50%);
+            width: min(360px, calc(100vw - 48px)); box-sizing: border-box; z-index: 3;
+            padding: 10px 12px; border: 1px solid #d7dce2; border-radius: 8px;
+            background: rgb(255 255 255 / 0.95); color: #334155;
+            font: 11px -apple-system, BlinkMacSystemFont, sans-serif; pointer-events: none; }
         .depth-legend[hidden] { display: none; }
-        .depth-ramp { flex: 1; height: 7px; border-radius: 2px; }
-        body.dark-theme .depth-legend { color: #abc; }
-        body.embed-mode .depth-legend { top: 64px; }
+        .depth-heading { display: flex; justify-content: space-between; margin-bottom: 6px; }
+        .depth-heading strong { font-size: 12px; }
+        .depth-ramp { height: 12px; border-radius: 2px; }
+        .depth-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-variant-numeric: tabular-nums; }
+        body.dark-theme .depth-legend { color: #e2e8f0; background: rgb(24 24 24 / 0.95); border-color: #475569; }
+        body.embed-mode .depth-legend { top: 14px; }
+        @media (max-width: 1049px) {
+            body:not(.embed-mode) .depth-legend { left: 24px; top: 120px; transform: none; }
+        }
+        @media (max-width: 759px) {
+            body.embed-mode .depth-legend { left: 24px; top: 112px; transform: none; }
+        }
         .layout-region span { position: absolute; top: 2px; left: 3px; max-width: calc(100% - 6px);
             overflow: hidden; white-space: nowrap; font: 10px monospace; color: #24495e;
             background: #ffffffdd; padding: 1px 3px; }
@@ -875,6 +887,6 @@
         };
     </script>
 
-    <script type="module" src="./js/main-hierarchy-vggt.js?v=88"></script>
+    <script type="module" src="./js/main-hierarchy-vggt.js?v=89"></script>
 </body>
 </html>

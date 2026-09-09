@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { planPlayback, PlaybackClock, formatClock } from './playback-timeline.js?v=1';
+import { planPlayback, PlaybackClock, formatClock, DEFAULT_PLAYBACK_SECONDS } from './playback-timeline.js?v=2';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -7,7 +7,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=55';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
-import { LayoutGuides } from './layout-guides.js?v=2';
+import { LayoutGuides } from './layout-guides.js?v=3';
 import { bindRegionClip } from './region-clipping.js?v=1';
 import { InteractionEngine } from './interaction-engine.js?v=6';
 import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=49';
@@ -102,7 +102,7 @@ export class VGGTHierarchyApp {
         // the camera, so auto-framing cedes control until Reset (smart-suspend).
         this.autoFrameEnabled = localStorage.getItem('gh-auto-frame') !== 'false';
         this.userCameraOverride = false;
-        this.TARGET_VIZ_SEC = 60;
+        this.TARGET_VIZ_SEC = DEFAULT_PLAYBACK_SECONDS;
         // Hold the final composition for the entire timeline. Follow remains opt-in.
         this.fixedFrame = localStorage.getItem('gh-fixed-frame') !== 'false';
         const regions = new URLSearchParams(window.location.search).get('regions');
@@ -952,7 +952,7 @@ export class VGGTHierarchyApp {
         const reserved = panel ? Math.min(width * 0.45, panel.width + 40) : 0;
         // Reserve fixed UI bands so changing annotation text cannot reframe a build.
         const embed = document.body.classList.contains('embed-mode');
-        const top = embed ? 80 : 125;
+        const top = embed ? (width < 760 ? 190 : 80) : (width < 1050 ? 195 : 125);
         const bottom = embed ? 220 : 260;
         return { left: 24, top, width: Math.max(100, width - reserved - 48),
             height: Math.max(100, window.innerHeight - top - bottom) };

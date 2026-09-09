@@ -9,7 +9,8 @@ Turning it off opts into framing the currently visible clusters.
 
 **Show Node Labels** is off by default and controls long cell/timeline labels.
 Region borders and subtle cell fills encode tree depth, with root = 0 and a
-shared blue-scale legend. The scale adapts to light/dark themes.
+prominent rainbow legend (red at the root through violet at maximum depth).
+The scale adapts to light/dark themes.
 
 ## Planning and containment
 
@@ -51,18 +52,18 @@ outside a cell are clipped during the explanatory view and available during manu
 
 ## Animation
 
-Each dataset automatically replays in exactly 60 seconds of unpaused playback,
+Each dataset automatically replays in exactly 30 seconds of unpaused playback,
 starting after loading. The schedule scales recorded gaps (with the existing idle
 stall compression) directly, with no minimum event delay. Events sharing a timestamp
 remain simultaneous; animation durations shrink to the available interval before
 each event's scheduled completion. Untimed datasets use evenly spaced events.
 An absolute monotonic playback clock prevents per-frame delays from accumulating;
 a late frame catches up to its scheduled state. The final merge is settled by the
-60-second deadline. Browser rendering presents that state on the next available frame.
+30-second deadline. Browser rendering presents that state on the next available frame.
 
 The visible run clock interpolates elapsed source timestamps and explicitly labels
 compressed idle intervals. A separate playback counter and continuous progress bar
-show progress through the minute. Pause freezes time and reconstruction animations;
+show progress through the replay. Pause freezes time and reconstruction animations;
 seek, reset, and replay update the clocks and scene together. Old saved speed settings
 are ignored; each dataset gets its own automatic timing.
 
@@ -95,7 +96,8 @@ needed for these checks.
 
 For visual inspection, serve the repository with the `py312` environment and open
 `hierarchy-vggt.html?dataset=BRUSSELS&regions=1&camera=fixed`. Home/End jump to the
-first/final event, the arrow keys step, and Space plays/pauses. The faint guides
-show future leaf locations; solid guides show the currently reconstructed regions.
+first/final event, the arrow keys step, and Space plays/pauses. Thin solid guides
+show future leaf locations with lower opacity and currently
+reconstructed regions with stronger color. The rainbow legend labels every depth.
 The colors use node depth, not point-cloud Z coordinates; photographic point colors
 remain unchanged.

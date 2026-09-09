@@ -1,7 +1,9 @@
-// Map recorded event times directly onto one minute. There is no minimum
+export const DEFAULT_PLAYBACK_SECONDS = 30;
+
+// Map recorded event times directly onto the playback duration. There is no minimum
 // event delay: simultaneous events stay simultaneous. Each animation occupies
 // only the available interval immediately before its event's completion time.
-export function planPlayback(events, duration = 60, animationDuration = 0.8) {
+export function planPlayback(events, duration = DEFAULT_PLAYBACK_SECONDS, animationDuration = 0.8) {
     if (!events.length) return { duration: 0, starts: [], ends: [], animationDurations: [] };
     const count = events.length;
     const gaps = events.map((e, i) => i ? Math.max(0, e.realGapSec || 0) : 0);

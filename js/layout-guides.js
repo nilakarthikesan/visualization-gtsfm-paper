@@ -2,9 +2,14 @@ import * as THREE from 'three';
 
 export function depthColor(depth, maxDepth, darkTheme = false) {
     const t = maxDepth > 0 ? Math.max(0, Math.min(1, depth / maxDepth)) : 0;
-    const light = darkTheme ? [62, 126, 172] : [107, 174, 214];
-    const dark = darkTheme ? [184, 224, 245] : [8, 48, 107];
-    return light.map((c, i) => Math.round(c + (dark[i] - c) * t)).join(' ');
+    // Red at the root, then orange, yellow, green, blue, indigo, and violet.
+    const stops = darkTheme
+        ? [[248,113,113], [251,146,60], [250,204,21], [74,222,128], [56,189,248], [129,140,248], [192,132,252]]
+        : [[220,38,38], [234,88,12], [218,179,0], [22,163,74], [2,132,199], [79,70,229], [147,51,234]];
+    const position = t * (stops.length - 1);
+    const index = Math.min(stops.length - 2, Math.floor(position));
+    const fraction = position - index;
+    return stops[index].map((c, i) => Math.round(c + (stops[index + 1][i] - c) * fraction)).join(' ');
 }
 
 // DOM guides stay sharp and legible independently of point size and postprocessing.
@@ -21,9 +26,16 @@ export class LayoutGuides {
         const maxDepth = Math.max(0, ...this.layout.treeNodes.map(node => node.depth));
         const legend = document.getElementById('layout-depth-legend');
         if (legend) {
-            legend.querySelector('.depth-end').textContent = `Depth ${maxDepth}`;
+            legend.querySelector('.depth-end').textContent = `Root → depth ${maxDepth}`;
+            const colors = Array.from({length: 7}, (_, i) =>
+                `rgb(${depthColor(maxDepth * i / 6, maxDepth, this.darkTheme)})`);
             legend.querySelector('.depth-ramp').style.background =
-                `linear-gradient(to right, rgb(${depthColor(0, maxDepth, this.darkTheme)}), rgb(${depthColor(maxDepth, maxDepth, this.darkTheme)}))`;
+                `linear-gradient(to right, ${colors.join(', ')})`;
+            legend.querySelector('.depth-ticks').replaceChildren(...Array.from({length: maxDepth + 1}, (_, depth) => {
+                const tick = document.createElement('span');
+                tick.textContent = depth;
+                return tick;
+            }));
         }
         this.entries = this.layout.treeNodes.map(node => {
             const el = document.createElement('div');

@@ -33,9 +33,9 @@ Open [http://localhost:8000/hierarchy-vggt.html](http://localhost:8000/hierarchy
 
 Gerrard Hall is the default dataset. Playback starts automatically after loading,
 including when switching datasets in the project-page tabs or the viewer's picker.
-Each uninterrupted replay lasts 60 seconds, including the final merge. Recorded
+Each uninterrupted replay lasts 30 seconds, including the final merge. Recorded
 event gaps are scaled directly with no minimum delay; animations shorten to fit.
-The live run clock shows accelerated elapsed time alongside the one-minute playback
+The live run clock shows accelerated elapsed time alongside the 30-second playback
 counter. Pause freezes both clocks and animations; scrubbing moves them together.
 
 **Show Reserved Regions** is on by default, with boundaries colored by tree depth. **Show Node Labels** is opt-in. Cells fit the central 95% of points and cameras; the planner considers reconstruction shapes at every merge stage to reduce unused space. **Lock Final Frame** keeps the completed reconstruction’s frame throughout playback. Home/End jump to the first/final event. Click anywhere on the timeline bar to jump to an event. Mouse drag orbits, scroll zooms, right-click drag pans.

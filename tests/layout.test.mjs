@@ -49,29 +49,29 @@ function synthetic(path, positions) {
     return c;
 }
 
-test('one-minute schedules preserve event timing without a minimum delay', () => {
+test('default 30-second schedules preserve event timing without a minimum delay', () => {
     assert.equal(planPlayback([]).duration, 0);
     for (const count of [1, 9, 93, 500]) for (const timed of [false, true]) {
         const events = Array.from({length: count}, (_, i) => ({
             realGapSec: timed && i ? (i % 7 ? 1 : 10000) : 0
         }));
         const plan = planPlayback(events);
-        assert.equal(plan.duration, 60);
+        assert.equal(plan.duration, 30);
         assert.equal(plan.starts.length, count);
-        assert.equal(plan.ends[count - 1], count > 1 ? 60 : 0);
+        assert.equal(plan.ends[count - 1], count > 1 ? 30 : 0);
         for (let i = 0; i < count; i++) {
             assert.ok(plan.animationDurations[i] >= 0);
             assert.ok(plan.animationDurations[i] <= .8 + 1e-9);
             assert.ok(plan.starts[i] >= (plan.ends[i - 1] || 0));
             assert.ok(plan.indexAt(plan.starts[i]) >= i);
         }
-        assert.equal(plan.indexAt(60), count - 1);
+        assert.equal(plan.indexAt(30), count - 1);
         assert.equal(plan.runClock(30), null, 'must not invent missing run timestamps');
     }
     const burst = planPlayback([{realGapSec:0}, {realGapSec:0}, {realGapSec:1}, {realGapSec:5999}]);
-    assert.deepEqual(burst.ends, [0, 0, .01, 60]);
+    assert.deepEqual(burst.ends, [0, 0, .005, 30]);
     assert.equal(burst.animationDurations[1], 0);
-    assert.equal(burst.animationDurations[2], .01);
+    assert.equal(burst.animationDurations[2], .005);
 });
 
 test('playback clock excludes pauses, supports seeks, and cannot accumulate frame drift', () => {
@@ -96,7 +96,7 @@ test('run clock advances between events and labels compressed idle intervals', (
         {effTime:100, realGapSec:0},
         {effTime:200, realGapSec:100},
         {effTime:90200, realGapSec:100, wasStall:true}
-    ]);
+    ], 60);
     assert.equal(plan.runClock(0).elapsed, 0);
     assert.equal(plan.runClock(15).elapsed, 50);
     const skipped = plan.runClock(45);
@@ -127,11 +127,11 @@ test('pausing the playback clock freezes an in-progress reconstruction animation
     assert.equal(engine.activeAnimations.length, 0);
 });
 
-function verifyMinutePlayback(clusters, engine, events) {
+function verifyDefaultPlayback(clusters, engine, events) {
     const plan = planPlayback(events);
     const app = Object.create(VGGTHierarchyApp.prototype);
     Object.assign(app, { events, animationEngine:engine, playbackPlan:plan,
-        playback:new PlaybackClock(60), currentEventIndex:0, isPlaying:true,
+        playback:new PlaybackClock(plan.duration), currentEventIndex:0, isPlaying:true,
         ui:{playBtn:{textContent:'Pause'}}, frustumEngine:{syncToEventIndex(){}},
         fitCameraToVisible(){}, updateUI(){}, updatePlaybackClock(){}, updateAnnotation(){},
         collapseToFinalView(){this.finalViewActive=true;} });
@@ -146,13 +146,13 @@ function verifyMinutePlayback(clusters, engine, events) {
         assert.equal(app.currentEventIndex, plan.indexAt(app.playback.elapsed));
         assert.equal(app.finalViewActive, undefined);
     }
-    app.advancePlayback(1059.999); engine.update(0);
-    assert.equal(app.isPlaying, true, 'must not finish before the minute is over');
-    app.advancePlayback(1060);
-    assert.equal(app.playback.elapsed, 60);
+    app.advancePlayback(1000 + plan.duration - .001); engine.update(0);
+    assert.equal(app.isPlaying, true, 'must not finish before the scheduled duration');
+    app.advancePlayback(1000 + plan.duration);
+    assert.equal(app.playback.elapsed, 30);
     assert.equal(app.isPlaying, false);
     assert.equal(app.finalViewActive, true);
-    assert.equal(engine.activeAnimations.length, 0, 'final animation must finish inside the minute');
+    assert.equal(engine.activeAnimations.length, 0, 'final animation must finish within the replay duration');
     assert.deepEqual([...clusters.values()].filter(c => c.pointCloud?.visible), [clusters.get('merged')]);
 }
 
@@ -254,7 +254,7 @@ test('Gerrard Hall selection loads its own data and completes its nine-event hie
         }
         engine.applyEventInstant(events.length - 1);
         assert.deepEqual([...clusters.values()].filter(c => c.pointCloud?.visible), [clusters.get('merged')]);
-        verifyMinutePlayback(clusters, engine, events);
+        verifyDefaultPlayback(clusters, engine, events);
     } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
 });
 
@@ -351,7 +351,7 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
             if (size===0) assert.ok([...clusters.values()].every(c=>!c.frustumGeometry));
         }
         t.diagnostic('Verified 93 events, 40 reveals, 53 merges, and at least 95% point and camera-wireframe coverage.');
-        verifyMinutePlayback(clusters, engine, events);
+        verifyDefaultPlayback(clusters, engine, events);
     } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
 });
 
