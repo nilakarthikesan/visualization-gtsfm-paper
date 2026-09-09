@@ -103,13 +103,15 @@ class VGGTHierarchyApp {
         this.userCameraOverride = false;
         // Playback speed (Frank): the timeline is paced by the REAL seconds between
         // pipeline events; this multiplier speeds up/slows down that replay. 1 = base.
-        this.timelineSpeed = parseFloat(localStorage.getItem('gh-timeline-speed')) || 1;
-        // Real seconds -> playback (viz) seconds mapping at 1x, and the cap on any
-        // single pause so a very long compute gap stays felt but bounded.
-        this.REAL_SEC_TO_VIZ = 0.012;   // 1x: ~100s of real compute -> ~1.2s pause
-        this.MAX_PAUSE_SEC = 3.5;       // 1x: no single pause longer than this
-        this.realSpanSec = 0;
-        this.pauseSum1x = 0;
+        // Playback speed expressed directly in "x real-time" (Frank): speedX real
+        // seconds of computation play in 1 viz second. speedX = 1 is true 1:1
+        // real-time (very long, the "turn back to realtime" option); the default is
+        // a compressed value chosen so the whole build runs in ~TARGET_VIZ_SEC.
+        this.MAX_SPEEDX = 500;          // slider top: 500x real-time
+        this.MIN_SPEEDX = 1;            // slider bottom: true real-time
+        this.TARGET_VIZ_SEC = 45;       // default target playback length
+        this.speedX = parseFloat(localStorage.getItem('gh-speed-x')) || 0; // 0 => auto-pick on load
+        this.realSpanSec = 0;           // sum of (capped) real seconds between events
         // Fixed-frame ("lock the whole build") camera: instead of the camera chasing
         // the growing visible set event-by-event, frame the ENTIRE final floorplan
         // once and hold it. This is the area-universal / slicing-floorplan behavior -
@@ -556,18 +558,16 @@ class VGGTHierarchyApp {
             });
         }
 
-        // Playback Speed (Frank): scales the real-timing replay. The readout shows
-        // the multiplier plus an approximate "x real-time" so visitors can feel how
-        // much faster than the actual computation they're watching.
+        // Playback Speed (Frank): the slider reads directly in "x real-time". It's
+        // log-scaled from 1x (true real-time, far left = "turn back to realtime") up
+        // to MAX_SPEEDX. The readout reports the factor plus the resulting length.
         const speedSlider = document.getElementById('slider-timeline-speed');
         if (speedSlider) {
-            speedSlider.value = this.timelineSpeed;
+            if (this.speedX) speedSlider.value = this._speedXToPos(this.speedX);
             speedSlider.addEventListener('input', (e) => {
-                const v = parseFloat(e.target.value);
-                this.timelineSpeed = v;
-                if (this.animationEngine) this.animationEngine.setSpeed(v);
-                localStorage.setItem('gh-timeline-speed', v);
-                this.updateSpeedReadout();
+                const sx = this._posToSpeedX(parseFloat(e.target.value));
+                this.applyTimelineSpeed(sx);
+                localStorage.setItem('gh-speed-x', sx);
             });
         }
 
@@ -838,20 +838,21 @@ class VGGTHierarchyApp {
             this.events = this.animationEngine.initTimeline();
             this.currentEventIndex = 0;
 
-            // Real-timing playback bookkeeping. realSpanSec = sum of the (artifact-
-            // capped) real seconds between events = the effective real duration we
-            // honor. pauseSum1x = total playback seconds spent in inter-event pauses
-            // at 1x. Together with the fixed materialization animations these let us
-            // show Frank an approximate "x real-time" factor next to the speed slider.
+            // realSpanSec = total (artifact-capped) real seconds of the run = the
+            // effective real duration we honor. At speedX the inter-event pauses are
+            // realGap/speedX, so this drives both the default speed and the readout.
             this.realSpanSec = 0;
-            this.pauseSum1x = 0;
             for (const e of this.events) {
-                const gap = typeof e.realGapSec === 'number' ? e.realGapSec : 0;
-                this.realSpanSec += gap;
-                this.pauseSum1x += Math.min(gap * this.REAL_SEC_TO_VIZ, this.MAX_PAUSE_SEC);
+                this.realSpanSec += (typeof e.realGapSec === 'number' ? e.realGapSec : 0);
             }
-            this.animationEngine.setSpeed(this.timelineSpeed);
-            this.updateSpeedReadout();
+            // Auto-pick a compressed default the first time (no saved preference):
+            // speedX so the run plays in ~TARGET_VIZ_SEC (minus the ~fast anim floor).
+            if (!this.speedX || this.speedX < this.MIN_SPEEDX) {
+                const animFloor = this.events.length * 0.08;
+                const denom = Math.max(5, this.TARGET_VIZ_SEC - animFloor);
+                this.speedX = this._clampSpeedX(this.realSpanSec / denom);
+            }
+            this.applyTimelineSpeed(this.speedX);
 
             const leafClusters = this.animationEngine.getLeafClusters();
             this.convergenceEngine.prepareAllLeaves(leafClusters);
@@ -1385,25 +1386,59 @@ class VGGTHierarchyApp {
         this.jumpTo(this.currentEventIndex);
     }
 
-    // Update the "1.0x · ≈ 180× real-time" label beside the speed slider.
+    _clampSpeedX(x) {
+        return Math.min(this.MAX_SPEEDX, Math.max(this.MIN_SPEEDX, x || 1));
+    }
+
+    // Log map between the 0..1 slider position and speedX in [MIN_SPEEDX, MAX_SPEEDX].
+    _posToSpeedX(pos) {
+        const p = Math.min(1, Math.max(0, pos));
+        return this._clampSpeedX(this.MIN_SPEEDX * Math.pow(this.MAX_SPEEDX / this.MIN_SPEEDX, p));
+    }
+    _speedXToPos(x) {
+        const sx = this._clampSpeedX(x);
+        return Math.log(sx / this.MIN_SPEEDX) / Math.log(this.MAX_SPEEDX / this.MIN_SPEEDX);
+    }
+
+    // Apply a new "x real-time" speed: sets the pause divisor (used by the play
+    // loop) and scales the materialization animations so faster speeds are snappier
+    // while true real-time keeps the leisurely base timing.
+    applyTimelineSpeed(sx) {
+        this.speedX = this._clampSpeedX(sx);
+        if (this.animationEngine) {
+            const animMult = Math.min(10, Math.max(1, this.speedX / 8));
+            this.animationEngine.setSpeed(animMult);
+        }
+        // Keep the slider thumb in sync (e.g. after the auto-pick on load, or when a
+        // different dataset picks a different default).
+        const slider = document.getElementById('slider-timeline-speed');
+        if (slider) slider.value = this._speedXToPos(this.speedX);
+        this.updateSpeedReadout();
+    }
+
+    // Update the "≈ 180× real-time · ~45s" label beside the speed slider.
     updateSpeedReadout() {
         const el = document.getElementById('val-timeline-speed');
         if (!el) return;
+        const sx = this.speedX || 1;
         const N = this.events ? this.events.length : 0;
-        const animSum = (N * this.animationEngine?.baseMergeDuration || N * 0.8) / this.timelineSpeed;
-        const pauseSum = (this.pauseSum1x || 0) / this.timelineSpeed;
-        const vizDur = animSum + pauseSum;
-        let txt = `${this.timelineSpeed.toFixed(2)}\u00d7`;
-        if (this.realSpanSec > 0 && vizDur > 0) {
-            txt += ` \u00b7 \u2248 ${this._fmtMult(this.realSpanSec / vizDur)} real-time`;
-        }
-        el.textContent = txt;
+        const animMult = Math.min(10, Math.max(1, sx / 8));
+        const animDur = (this.animationEngine?.baseMergeDuration || 0.8) / animMult;
+        const vizDur = (this.realSpanSec || 0) / sx + N * animDur;
+        const factor = sx <= 1.001 ? '1\u00d7 (real-time)' : `\u2248 ${this._fmtMult(sx)} real-time`;
+        el.textContent = `${factor} \u00b7 ~${this._fmtDur(vizDur)}`;
     }
 
     _fmtMult(x) {
         if (x >= 100) return Math.round(x / 10) * 10 + '\u00d7';
         if (x >= 10) return Math.round(x) + '\u00d7';
         return x.toFixed(1) + '\u00d7';
+    }
+
+    _fmtDur(sec) {
+        if (sec >= 3600) return (sec / 3600).toFixed(1) + 'h';
+        if (sec >= 90) return Math.round(sec / 60) + 'm';
+        return Math.round(sec) + 's';
     }
 
     togglePlay() {
@@ -1609,15 +1644,17 @@ class VGGTHierarchyApp {
             const ref = Math.max(this.lastStepTime, this.lastAnimEndTime || 0);
             const nextIdx = this.currentEventIndex + 1;
             const nextEvent = nextIdx < this.events.length ? this.events[nextIdx] : null;
-            // Pace by the REAL gap (seconds) before the next event, mapped to
-            // playback seconds and divided by the live speed multiplier. Long
-            // compute pauses read as pauses; bursts fire back-to-back. Falls back
-            // to the legacy per-event delay when a dataset has no timestamps.
+            // Pace by the REAL gap before the next event, in "x real-time": the
+            // pause is the real seconds divided by speedX. At speedX=1 this is
+            // literally real-time; higher speedX compresses it. Long compute pauses
+            // read as pauses; bursts fire back-to-back. Falls back to the legacy
+            // per-event delay when a dataset has no timestamps.
+            const sx = this.speedX || 1;
             let delay;
             if (nextEvent && typeof nextEvent.realGapSec === 'number') {
-                delay = Math.min(nextEvent.realGapSec * this.REAL_SEC_TO_VIZ, this.MAX_PAUSE_SEC) / this.timelineSpeed;
+                delay = nextEvent.realGapSec / sx;
             } else {
-                delay = (nextEvent && nextEvent.delay ? nextEvent.delay : 0.12) / this.timelineSpeed;
+                delay = (nextEvent && nextEvent.delay ? nextEvent.delay : 0.12);
             }
             if (!hasActiveAnims && time - ref > delay) {
                 if (this.currentEventIndex < this.events.length - 1) {
