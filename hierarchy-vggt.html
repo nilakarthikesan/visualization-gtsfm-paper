@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerrard Hall - VGGT Squareness Layout</title>
+    <title>VGGT Reconstruction and Merging</title>
     <style>
         * {
             margin: 0;
@@ -191,6 +191,14 @@
             margin: 10px 0;
             cursor: pointer;
         }
+        .playback-clocks { display: flex; justify-content: space-between; gap: 12px;
+            margin-top: 9px; font-size: 11px; color: #555; }
+        .playback-clocks .clock-value { display: block; margin-top: 2px;
+            font: 15px ui-monospace, monospace; font-variant-numeric: tabular-nums; color: #222; }
+        .playback-clocks .playback-counter { text-align: right; }
+        #clock-status { font-size: 10px; margin-left: 5px; }
+        body.dark-theme .playback-clocks { color: #aaa; }
+        body.dark-theme .playback-clocks .clock-value { color: #eee; }
         .progress-bar {
             position: absolute;
             left: 0;
@@ -198,7 +206,6 @@
             height: 100%;
             background: linear-gradient(90deg, #2196F3, #64B5F6);
             width: 0%;
-            transition: width 0.1s linear;
             border-radius: 3px;
         }
         button {
@@ -371,6 +378,11 @@
         #visual-settings.collapsed .vs-details {
             display: none;
         }
+        #visual-settings .vs-details {
+            max-height: calc(100vh - 130px);
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
         #visual-settings .vs-header {
             cursor: pointer;
             display: flex;
@@ -454,7 +466,7 @@
             pointer-events: none;
             position: fixed;
             left: 20px;
-            bottom: 180px;
+            bottom: 30px;
             max-width: 340px;
             z-index: 40;
             opacity: 0;
@@ -619,9 +631,9 @@
         <div id="ui-layer">
             <div class="top-bar">
                 <div class="title-block" id="title-block" onclick="this.classList.toggle('collapsed')">
-                    <h1>VGGT Squareness Layout <span class="toggle-icon">&#9660;</span></h1>
+                    <h1>VGGT Reconstruction and Merging <span class="toggle-icon">&#9660;</span></h1>
                     <div class="title-details">
-                        <div class="subtitle">Recursive rectangle subdivision with squareness-optimized cluster placement</div>
+                        <div class="subtitle">Reconstruct in reserved regions, then merge within one final frame</div>
                         <div class="pipeline-tag">VGGT PIPELINE</div>
                     </div>
                 </div>
@@ -691,11 +703,7 @@
 
                     <div class="vs-section-label">Timeline</div>
                     <div class="vs-row">
-                        <label for="slider-timeline-speed">Speed (× real-time)</label>
-                        <input type="range" id="slider-timeline-speed" min="0" max="1" step="0.005" value="0.85">
-                    </div>
-                    <div class="vs-row">
-                        <span class="vs-hint" id="val-timeline-speed">real-time</span>
+                        <span class="vs-hint">Automatic speed · 30 seconds per dataset</span>
                     </div>
 
                     <div class="vs-section-label">Camera</div>
@@ -716,7 +724,7 @@
                         <input type="checkbox" id="toggle-auto-frame" checked>
                     </div>
                     <div class="vs-row">
-                        <label for="toggle-lock-frame">Progressive Frame</label>
+                        <label for="toggle-lock-frame">Lock Final Frame</label>
                         <input type="checkbox" id="toggle-lock-frame" checked>
                     </div>
 
@@ -737,6 +745,14 @@
                     </div>
 
                     <div class="vs-section-label">Layout</div>
+                    <div class="vs-row">
+                        <label for="toggle-layout-guides">Show Reserved Regions</label>
+                        <input type="checkbox" id="toggle-layout-guides" checked>
+                    </div>
+                    <div class="vs-row">
+                        <label for="toggle-node-labels">Show Node Labels</label>
+                        <input type="checkbox" id="toggle-node-labels">
+                    </div>
                     <div class="vs-row">
                         <label for="slider-tile-gap">Cluster Gap</label>
                         <input type="range" id="slider-tile-gap" min="0" max="0.15" step="0.01" value="0.05">
@@ -782,7 +798,12 @@
                     <span id="event-label" style="font-size: 11px; color: #333;">Initializing...</span>
                     <span class="toggle-icon">&#9660;</span>
                 </div>
-                
+                <div class="playback-clocks">
+                    <div>Run elapsed <span id="clock-status"></span>
+                        <span class="clock-value" id="run-clock">00:00:00.0</span></div>
+                    <div class="playback-counter">Playback
+                        <span class="clock-value" id="playback-clock">00:00 / 00:30</span></div>
+                </div>
                 <div class="controls-details">
                     <div class="progress-container" id="timeline-track">
                         <div class="progress-bar" id="timeline-progress"></div>
@@ -813,6 +834,39 @@
         </div>
     </div>
 
+    <div id="layout-guides" aria-hidden="true" hidden></div>
+    <div id="layout-depth-legend" class="depth-legend" hidden>
+        <div class="depth-heading"><strong>Cluster depth</strong><span class="depth-end"></span></div>
+        <div class="depth-ramp"></div><div class="depth-ticks"></div>
+    </div>
+    <style>
+        #layout-guides { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+        .layout-region { position: absolute; box-sizing: border-box; border: 1px solid rgb(var(--depth-color) / 0.6); }
+        .layout-region.arrived { border: 1px solid rgb(var(--depth-color) / 0.95);
+            background: rgb(var(--depth-color) / 0.035); }
+        .layout-region.planned-parent { border-color: rgb(var(--depth-color) / 0.45); }
+        .depth-legend { position: fixed; left: 50%; top: 20px; transform: translateX(-50%);
+            width: min(360px, calc(100vw - 48px)); box-sizing: border-box; z-index: 3;
+            padding: 10px 12px; border: 1px solid #d7dce2; border-radius: 8px;
+            background: rgb(255 255 255 / 0.95); color: #334155;
+            font: 11px -apple-system, BlinkMacSystemFont, sans-serif; pointer-events: none; }
+        .depth-legend[hidden] { display: none; }
+        .depth-heading { display: flex; justify-content: space-between; margin-bottom: 6px; }
+        .depth-heading strong { font-size: 12px; }
+        .depth-ramp { height: 12px; border-radius: 2px; }
+        .depth-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-variant-numeric: tabular-nums; }
+        body.dark-theme .depth-legend { color: #e2e8f0; background: rgb(24 24 24 / 0.95); border-color: #475569; }
+        body.embed-mode .depth-legend { top: 14px; }
+        @media (max-width: 1049px) {
+            body:not(.embed-mode) .depth-legend { left: 24px; top: 120px; transform: none; }
+        }
+        @media (max-width: 759px) {
+            body.embed-mode .depth-legend { left: 24px; top: 112px; transform: none; }
+        }
+        .layout-region span { position: absolute; top: 2px; left: 3px; max-width: calc(100% - 6px);
+            overflow: hidden; white-space: nowrap; font: 10px monospace; color: #24495e;
+            background: #ffffffdd; padding: 1px 3px; }
+    </style>
     <script type="importmap">
     {
         "imports": {
@@ -833,6 +887,6 @@
         };
     </script>
 
-    <script type="module" src="./js/main-hierarchy-vggt.js?v=82"></script>
+    <script type="module" src="./js/main-hierarchy-vggt.js?v=89"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { createPointMaterial, applyBlendMode } from './point-material.js?v=45';
+import { bindRegionClip } from './region-clipping.js?v=1';
+import { createPointMaterial, applyBlendMode } from './point-material.js?v=47';
 
 export class SquarenessAnimationEngine {
     constructor(clusters, layoutEngine, worldGroup) {
@@ -17,6 +18,7 @@ export class SquarenessAnimationEngine {
         this.mergeDuration = this.baseMergeDuration;
         this.leafConvergeDuration = this.baseConvergeDuration;
         this.speed = 1;
+        this.now = () => performance.now();
 
         this.particleEngine = null;
         this.convergenceEngine = null;
@@ -77,6 +79,7 @@ export class SquarenessAnimationEngine {
             cloud.visible = false;
             cloud.frustumCulled = false;
             this.worldGroup.add(cloud);
+            bindRegionClip(cloud, () => this.transitionRegion);
             return cloud;
         };
 
@@ -254,6 +257,9 @@ export class SquarenessAnimationEngine {
         this.activeAnimations = [];
 
         for (const cluster of this.clusters.values()) {
+            if (this.convergenceEngine?.clusterData.has(cluster.path)) {
+                this.convergenceEngine.settleClusterInstant(cluster);
+            }
             if (cluster.pointCloud) {
                 cluster.pointCloud.visible = false;
                 cluster.pointCloud.material.uniforms.uOpacity.value = 1;
@@ -347,7 +353,7 @@ export class SquarenessAnimationEngine {
             type: 'converge',
             cluster,
             convergenceData: data,
-            startTime: performance.now(),
+            startTime: this.now(),
             duration: this.leafConvergeDuration * 1000,
             onComplete: () => {
                 this.convergenceEngine.settleClusterInstant(cluster);
@@ -376,6 +382,7 @@ export class SquarenessAnimationEngine {
 
     playMergeTransition(evt) {
         const merged = evt.cluster;
+        this.transitionRegion = merged.rect;
         const matchData = merged.matchData;
 
         if (!matchData || !merged.pointCloud) {
@@ -503,7 +510,7 @@ export class SquarenessAnimationEngine {
 
         if (this.particleEngine && merged.hierarchyPosition) {
             const mergeRadius = merged.radius * (merged.fitScale || 1);
-            this.particleEngine.trigger(merged.hierarchyPosition, mergeRadius);
+            this.particleEngine.trigger(merged.hierarchyPosition, mergeRadius, merged.rect);
         }
 
         this.activeAnimations.push({
@@ -514,7 +521,7 @@ export class SquarenessAnimationEngine {
             mergedCluster: merged,
             childPaths: evt.children,
             fadingChildren,
-            startTime: performance.now(),
+            startTime: this.now(),
             duration: this.mergeDuration * 1000,
             onComplete: () => {
                 this.preMatchedCloud.visible = false;
@@ -555,8 +562,8 @@ export class SquarenessAnimationEngine {
         cluster.pointCloud.material.transparent = true;
         this.activeAnimations.push({
             type: 'fadeIn', cluster,
-            startTime: performance.now(),
-            duration: 500
+            startTime: this.now(),
+            duration: this.mergeDuration * 1000
         });
     }
 
@@ -565,8 +572,8 @@ export class SquarenessAnimationEngine {
         cluster.pointCloud.material.transparent = true;
         this.activeAnimations.push({
             type: 'fadeOut', cluster,
-            startTime: performance.now(),
-            duration: 500,
+            startTime: this.now(),
+            duration: this.mergeDuration * 1000,
             onComplete: () => {
                 cluster.pointCloud.visible = false;
                 cluster.pointCloud.material.uniforms.uOpacity.value = 1;
@@ -576,21 +583,9 @@ export class SquarenessAnimationEngine {
 
     animateFallbackMerge(child, targetPos) {
         if (!child.pointCloud || !targetPos) return;
-        const startPos = child.group.position.clone();
-        const endPos = targetPos.clone();
-        const startScale = child.group.scale.x;
-        this.activeAnimations.push({
-            type: 'fallbackMerge', cluster: child,
-            startPos, endPos, startScale,
-            startTime: performance.now(),
-            duration: this.mergeDuration * 1000,
-            onComplete: () => {
-                child.pointCloud.visible = false;
-                child.pointCloud.material.uniforms.uOpacity.value = 1;
-                child.group.position.copy(child.hierarchyPosition);
-                child.group.scale.setScalar(startScale);
-            }
-        });
+        // Without correspondences, crossfade in the assigned regions. Moving a
+        // whole child to a differently centered parent could cross the parent edge.
+        this.animateFadeOut(child);
     }
 
     setFlowEnabled(v) {
@@ -611,7 +606,7 @@ export class SquarenessAnimationEngine {
     }
 
     update(dt) {
-        const now = performance.now();
+        const now = this.now();
         const swirlTime = this.flowEnabled ? (now / 1000) * this.flowSpeed : 0;
         for (let i = this.activeAnimations.length - 1; i >= 0; i--) {
             const a = this.activeAnimations[i];

@@ -7,8 +7,16 @@ terminals
 data/gerrard-hall-vggt-v2/C_4
 # merged_retriangulated is not referenced by the Brussels manifest.
 data/gerrard-hall-vggt-v2/merged_retriangulated
-# The standalone "original" Gerrard Hall dataset is not part of the Brussels deliverable.
-data/gerrard-hall-vggt
+# Gerrard Hall is offered by the demo; ship its reconstruction data, excluding
+# the old export and intermediate outputs that the viewer does not request.
+data/gerrard-hall-vggt/results-old
+data/gerrard-hall-vggt/results/**/processed_images
+data/gerrard-hall-vggt/results/**/plots
+data/gerrard-hall-vggt/results/**/metrics
+data/gerrard-hall-vggt/results/**/merged_pre_ba
+data/gerrard-hall-vggt/results/**/vggt_pre_ba
+data/gerrard-hall-vggt/results/**/*.pkl
+data/gerrard-hall-vggt/results/**/*.yaml
 # Thanjavur is held back until its diverged C_2 merges are verified (several of its
 # intermediate point files contain coordinates up to 1e75, which collapse the scene).
 data/thanjavur-vggt

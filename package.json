@@ -1,0 +1,8 @@
+{
+  "name": "gtsfm-visualization",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "three": "0.160.0"
+  }
+}

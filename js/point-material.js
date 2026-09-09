@@ -86,7 +86,9 @@ const VERTEX_SHADER = `
         if (uFlowAmp > 0.0001) {
             mvPosition.xyz += flowField(worldPos.xyz) * uFlowAmp;
         }
-        gl_PointSize = uPointSize * (uScale / -mvPosition.z);
+        bool perspective = projectionMatrix[2][3] == -1.0;
+        float sizeScale = perspective ? 1.0 / -mvPosition.z : projectionMatrix[1][1] * 0.577350269;
+        gl_PointSize = uPointSize * uScale * sizeScale;
         // Allow points to shrink well below the old 1.5px floor so dense fine
         // clouds keep their detail instead of blooming into fat discs.
         gl_PointSize = clamp(gl_PointSize, 0.75, uMaxSize);

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createPointMaterial } from './point-material.js?v=45';
+import { createPointMaterial } from './point-material.js?v=47';
 
 // pointScale: per-dataset base size multiplier. The v2 Brussels/C_* clouds are
 // dense fine optimizations, so they read best with small points (~0.4) that
@@ -9,8 +9,7 @@ import { createPointMaterial } from './point-material.js?v=45';
 // annotations (e.g. the final "Assembled ... — <scene>" label). Distinct from
 // `label`, which is the dataset-picker text.
 export const DATASETS = {
-    // The standalone "original" Gerrard Hall dataset is not part of the Brussels
-    // deliverable and its data is excluded from the hosted build, so it is not offered.
+    original: { label: 'Gerrard Hall', sceneName: 'Gerrard Hall', basePath: 'data/gerrard-hall-vggt/results', useManifest: false, pointScale: 1.0 },
     BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
     // `hidden` keeps a dataset reachable by ?dataset=<key> for local verification while
     // leaving it out of the picker. Thanjavur is hidden (and excluded from the hosted
@@ -22,6 +21,8 @@ export const DATASETS = {
     // C_4 (the "community photo collection") was removed: per Kathir, Dubrovnik
     // was never reconstructed successfully, so it should not be shown.
 };
+
+export const DEFAULT_DATASET = 'original';
 
 /**
  * Uniform spatial hash grid for approximate nearest-neighbor lookups.
@@ -145,9 +146,10 @@ export class Cluster {
 }
 
 export class VGGTDataLoader {
-    constructor(datasetKey = 'BRUSSELS') {
-        this.dataset = DATASETS[datasetKey] || DATASETS.BRUSSELS;
-        this.datasetKey = DATASETS[datasetKey] ? datasetKey : 'BRUSSELS';
+    constructor(datasetKey = DEFAULT_DATASET) {
+        if (!Object.hasOwn(DATASETS, datasetKey)) throw new Error(`Unknown dataset: ${datasetKey}`);
+        this.dataset = DATASETS[datasetKey];
+        this.datasetKey = datasetKey;
         this.basePath = this.dataset.basePath;
         this.clusters = new Map();
         this.root = null;

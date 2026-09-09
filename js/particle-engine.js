@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { bindRegionClip } from './region-clipping.js?v=1';
 
 const PARTICLE_COUNT = 200;
 const PARTICLE_LIFE = 1.8;
@@ -32,7 +33,9 @@ export class ParticleEngine {
                 void main() {
                     vAlpha = alpha;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = uSize * (uScale / -mvPosition.z);
+                    bool perspective = projectionMatrix[2][3] == -1.0;
+                    float sizeScale = perspective ? 1.0 / -mvPosition.z : projectionMatrix[1][1] * 0.577350269;
+                    gl_PointSize = uSize * uScale * sizeScale;
                     gl_PointSize = clamp(gl_PointSize, 1.0, 8.0);
                     gl_Position = projectionMatrix * mvPosition;
                 }
@@ -53,6 +56,7 @@ export class ParticleEngine {
         });
 
         this.particles = new THREE.Points(geom, this.material);
+        bindRegionClip(this.particles, () => this.region);
         this.particles.frustumCulled = false;
         this.particles.visible = false;
         this.worldGroup.add(this.particles);
@@ -68,8 +72,9 @@ export class ParticleEngine {
         this.material.uniforms.uColor.value.set(isDark ? 0xccddff : 0x888888);
     }
 
-    trigger(mergeCenter, mergeRadius) {
+    trigger(mergeCenter, mergeRadius, region = null) {
         if (!this.enabled) return;
+        this.region = region;
 
         const positions = this.particles.geometry.attributes.position.array;
         const alphas = this.particles.geometry.attributes.alpha.array;
@@ -98,6 +103,7 @@ export class ParticleEngine {
             alphas[i] = 0;
         }
 
+        this.constrainToRegion();
         this.particles.geometry.attributes.position.needsUpdate = true;
         this.particles.geometry.attributes.alpha.needsUpdate = true;
         this.particles.visible = true;
@@ -143,8 +149,20 @@ export class ParticleEngine {
             alphas[i] = alpha * (0.3 + 0.7 * Math.sin(elapsed * 2 + this.phases[i]) * 0.5 + 0.5);
         }
 
+        this.constrainToRegion();
         this.particles.geometry.attributes.position.needsUpdate = true;
         this.particles.geometry.attributes.alpha.needsUpdate = true;
+    }
+
+    constrainToRegion() {
+        if (!this.region) return;
+        const r = this.region;
+        const pad = Math.min(r.w, r.h) * 0.1;
+        const pos = this.particles.geometry.attributes.position.array;
+        for (let i = 0; i < pos.length; i += 3) {
+            pos[i] = Math.max(r.x + pad, Math.min(r.x + r.w - pad, pos[i]));
+            pos[i + 1] = Math.max(r.y + pad, Math.min(r.y + r.h - pad, pos[i + 1]));
+        }
     }
 
     dispose() {

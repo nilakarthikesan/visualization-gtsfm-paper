@@ -30,7 +30,8 @@ export class EDLPass extends Pass {
                 uEdlRadius: { value: this.edlRadius },
                 uResolution: { value: res.clone() },
                 uCameraNear: { value: camera.near },
-                uCameraFar: { value: camera.far }
+                uCameraFar: { value: camera.far },
+                uOrthographic: { value: camera.isOrthographicCamera ? 1.0 : 0.0 }
             },
             vertexShader: `
                 varying vec2 vUv;
@@ -47,10 +48,12 @@ export class EDLPass extends Pass {
                 uniform vec2 uResolution;
                 uniform float uCameraNear;
                 uniform float uCameraFar;
+                uniform float uOrthographic;
                 varying vec2 vUv;
 
                 float readDepth(vec2 coord) {
                     float fragCoordZ = texture2D(tDepth, coord).x;
+                    if (uOrthographic > 0.5) return mix(uCameraNear, uCameraFar, fragCoordZ);
                     float viewZ = (uCameraNear * uCameraFar) / (uCameraFar - fragCoordZ * (uCameraFar - uCameraNear));
                     return viewZ;
                 }
