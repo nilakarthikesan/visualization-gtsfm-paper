@@ -17,9 +17,10 @@ Datasets included:
 python3 -m http.server 8000
 ```
 
-Open [http://localhost:8000/hierarchy-vggt.html](http://localhost:8000/hierarchy-vggt.html) - this loads the original Gerrard Hall visualization. Pick other datasets from the Dataset dropdown in Visual Settings, or link directly:
+Open [http://localhost:8000/hierarchy-vggt.html](http://localhost:8000/hierarchy-vggt.html) - this loads the full Brussels visualization. Pick other datasets from the Dataset dropdown in Visual Settings, or link directly:
 
 - `hierarchy-vggt.html?dataset=BRUSSELS` - full Brussels merge story
+- `hierarchy-vggt.html?dataset=original` - original Gerrard Hall visualization
 - `hierarchy-vggt.html?dataset=C_1` (also `C_2`, `C_3`, `C_4`)
 
 ## Controls
@@ -31,7 +32,7 @@ Open [http://localhost:8000/hierarchy-vggt.html](http://localhost:8000/hierarchy
 | **Reset** | Return to the first event |
 | **Record** | Start/stop recording the visualization as a `.webm` video |
 
-Gerrard Hall is the default dataset. Playback starts automatically after loading,
+Brussels is the default dataset. Playback starts automatically after loading,
 including when switching datasets in the project-page tabs or the viewer's picker.
 Each uninterrupted replay lasts 0.5 seconds times its number of events, including
 the final merge: 4.5 seconds for Gerrard Hall (9 events) and 46.5 seconds for Brussels
@@ -145,4 +146,4 @@ reconstructed successfully, so it should not be shown.
 
 ## Preserved versions
 
-The exact version shown in the April 2026 team recording is tagged [`gerrard-hall-original`](../../tree/gerrard-hall-original). The default page (no `?dataset=` parameter) still renders that same Gerrard Hall visualization.
+The exact version shown in the April 2026 team recording is tagged [`gerrard-hall-original`](../../tree/gerrard-hall-original). Gerrard Hall remains available through `?dataset=original` or the dataset picker.

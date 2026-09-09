@@ -23,7 +23,7 @@ export const DATASETS = {
     // was never reconstructed successfully, so it should not be shown.
 };
 
-export const DEFAULT_DATASET = 'original';
+export const DEFAULT_DATASET = 'BRUSSELS';
 
 export class Cluster {
     constructor(path, type, childrenPaths = []) {

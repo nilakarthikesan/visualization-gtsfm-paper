@@ -137,7 +137,7 @@
     .demo-frame-wrap iframe {
         display: block;
         width: 100%;
-        height: 640px;
+        height: 864px;
         border: 0;
     }
     .demo-hint {
@@ -222,7 +222,7 @@
     footer a { color: var(--accent); text-decoration: none; }
 
     @media (max-width: 640px) {
-        .demo-frame-wrap iframe { height: 460px; }
+        .demo-frame-wrap iframe { height: 648px; }
         header { padding: 48px 0 32px; }
     }
 </style>
@@ -272,15 +272,15 @@
             Watch the accelerated run clock, pause, or scrub to any point in the timeline.
         </p>
         <div class="demo-tabs">
-            <button class="demo-tab active" data-dataset="original">Gerrard Hall</button>
-            <button class="demo-tab" data-dataset="BRUSSELS">Grand-Place Brussels &middot; 234 images</button>
+            <button class="demo-tab active" data-dataset="BRUSSELS">Grand-Place Brussels &middot; 234 images</button>
+            <button class="demo-tab" data-dataset="original">Gerrard Hall</button>
         </div>
         <div class="demo-frame-wrap">
-            <iframe id="demo-frame" src="hierarchy-vggt.html?dataset=original&embed=1&v=4" title="Interactive hierarchical reconstruction demo"></iframe>
+            <iframe id="demo-frame" src="hierarchy-vggt.html?dataset=BRUSSELS&embed=1&v=5" title="Interactive hierarchical reconstruction demo"></iframe>
         </div>
         <div class="demo-hint">
             <span>Drag to orbit &middot; scroll to zoom &middot; right-drag to pan &middot; click the timeline to jump between merge events</span>
-            <a id="demo-full-link" href="hierarchy-vggt.html?dataset=original" target="_blank">Open the full visualizer with all controls &nearr;</a>
+            <a id="demo-full-link" href="hierarchy-vggt.html?dataset=BRUSSELS" target="_blank">Open the full visualizer with all controls &nearr;</a>
         </div>
     </div>
 </section>
@@ -389,8 +389,8 @@
         <h2>About this visualization</h2>
         <p class="muted">
             The interactive demo replays real reconstructions of Gerrard Hall and Grand-Place Brussels.
-            Gerrard Hall starts by default, with six leaf reconstructions and three merges; select Brussels
-            to explore its 40 leaf reconstructions and 53 merges. Events follow each dataset's
+            Brussels starts by default, with 40 leaf reconstructions and 53 merges; select Gerrard Hall
+            to explore its six leaf reconstructions and three merges. Events follow each dataset's
             nested-dissection tree, with screen regions reserved recursively from the final reconstruction.
             Per-point correspondences between merge levels drive the fusion animation.
         </p>
@@ -427,7 +427,7 @@
         tab.addEventListener('click', () => {
             document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            frame.src = `hierarchy-vggt.html?dataset=${tab.dataset.dataset}&embed=1&v=4`;
+            frame.src = `hierarchy-vggt.html?dataset=${tab.dataset.dataset}&embed=1&v=5`;
             fullLink.href = `hierarchy-vggt.html?dataset=${tab.dataset.dataset}`;
         });
     });

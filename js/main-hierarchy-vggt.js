@@ -5,7 +5,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=56';
+import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=57';
 import { MatchingCoordinator, matchingPriorities } from './matching-coordinator.js?v=1';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
 import { LayoutGuides } from './layout-guides.js?v=3';
@@ -87,7 +87,9 @@ export class VGGTHierarchyApp {
     constructor() {
         // The explanatory layout uses contained paths without ambient point drift.
         this.flowMode = false;
-        this.blendMode = this.flowMode ? 'glow' : (localStorage.getItem('gh-blend-mode') || 'sharp');
+        // The project-page demo always uses the default, regardless of saved viewer settings.
+        this.blendMode = new URLSearchParams(window.location.search).get('embed') === '1'
+            ? 'sharp' : this.flowMode ? 'glow' : (localStorage.getItem('gh-blend-mode') || 'sharp');
         this.cameraAnimTarget = null;
         this.gradientBg = localStorage.getItem('gh-bg') || 'none';
         this.groundGridEnabled = localStorage.getItem('gh-grid') === 'true';
@@ -967,7 +969,7 @@ export class VGGTHierarchyApp {
         // Reserve fixed UI bands so changing annotation text cannot reframe a build.
         const embed = document.body.classList.contains('embed-mode');
         const top = embed ? (width < 760 ? 190 : 80) : (width < 1050 ? 195 : 125);
-        const bottom = embed ? 220 : 260;
+        const bottom = embed ? 180 : 260;
         return { left: 24, top, width: Math.max(100, width - reserved - 48),
             height: Math.max(100, window.innerHeight - top - bottom) };
     }

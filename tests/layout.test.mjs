@@ -228,7 +228,7 @@ test('look-ahead packing avoids leaf-count slivers in a 16-leaf caterpillar', ()
 test('Gerrard Hall selection loads its own data and completes its nine-event hierarchy', async () => {
     assert.throws(() => new VGGTDataLoader('missing-scene'), /Unknown dataset/);
     assert.throws(() => new VGGTDataLoader('toString'), /Unknown dataset/);
-    assert.equal(new VGGTDataLoader().datasetKey, 'original');
+    assert.equal(new VGGTDataLoader().datasetKey, 'BRUSSELS');
     const oldFetch = globalThis.fetch, oldLog = console.log;
     const requested = [];
     console.log = () => {};

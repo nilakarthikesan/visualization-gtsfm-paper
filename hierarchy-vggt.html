@@ -565,6 +565,7 @@
         }
         body.embed-mode #controls {
             width: 340px;
+            max-width: calc(100vw - 24px);
             padding: 8px 12px;
             margin-bottom: 10px;
             background: rgba(255, 255, 255, 0.82);
@@ -573,6 +574,10 @@
             background: rgba(24, 24, 24, 0.82);
         }
         body.embed-mode #controls .stats { display: none; }
+        body.embed-mode #render-style-control { display: none; }
+        @media (max-width: 400px) {
+            body.embed-mode #controls button { padding: 8px; }
+        }
 
         /* Kathir-style monospace HUD: run/stage/cameras/points (top-left) and
            control hints (top-right). Shown in the clean embed demo view. */
@@ -817,7 +822,7 @@
                         <button id="btn-record" class="record-btn">Record</button>
                     </div>
 
-                    <div class="control-row" style="justify-content: space-between; align-items: center;">
+                    <div id="render-style-control" class="control-row" style="justify-content: space-between; align-items: center;">
                         <label for="blend-mode-select" style="font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;">Render Style</label>
                         <select id="blend-mode-select" style="padding: 4px 8px; border-radius: 6px; border: 1px solid #ddd; font-size: 11px; background: #fff; color: #333; cursor: pointer;">
                             <option value="splat">Gaussian Splat</option>
@@ -887,6 +892,6 @@
         };
     </script>
 
-    <script type="module" src="./js/main-hierarchy-vggt.js?v=91"></script>
+    <script type="module" src="./js/main-hierarchy-vggt.js?v=93"></script>
 </body>
 </html>
