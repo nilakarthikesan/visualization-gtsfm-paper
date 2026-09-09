@@ -114,6 +114,41 @@ test('look-ahead packing avoids leaf-count slivers in a 16-leaf caterpillar', ()
     }
 });
 
+test('Gerrard Hall selection loads its own data and completes its nine-event hierarchy', async () => {
+    assert.throws(() => new VGGTDataLoader('missing-scene'), /Unknown dataset/);
+    assert.throws(() => new VGGTDataLoader('toString'), /Unknown dataset/);
+    assert.equal(new VGGTDataLoader().datasetKey, 'BRUSSELS');
+    const oldFetch = globalThis.fetch, oldLog = console.log;
+    const requested = [];
+    console.log = () => {};
+    globalThis.fetch = async path => {
+        requested.push(path);
+        return new Response(await fs.readFile(new URL('../' + path, import.meta.url)));
+    };
+    try {
+        const loader = new VGGTDataLoader('original');
+        assert.equal(loader.dataset.sceneName, 'Gerrard Hall');
+        const clusters = await loader.load();
+        const world = new THREE.Group();
+        const frustums = new FrustumEngine(world);
+        await frustums.loadForClusters(clusters, loader);
+        assert.ok(requested.every(path => path.startsWith('data/gerrard-hall-vggt/results/')));
+        const layout = new SquarenessLayoutEngine(clusters);
+        layout.computeLayout();
+        const engine = new SquarenessAnimationEngine(clusters, layout, world);
+        const events = engine.initTimeline();
+        assert.equal(events.length, 9);
+        assert.equal(events.filter(e => e.isLeaf).length, 6);
+        for (const event of events) {
+            assert.ok(event.cluster.pointCloud);
+            checkPoints(event.cluster);
+            for (const child of event.cluster.children) contains(event.cluster.rect, child.rect);
+        }
+        engine.applyEventInstant(events.length - 1);
+        assert.deepEqual([...clusters.values()].filter(c => c.pointCloud?.visible), [clusters.get('merged')]);
+    } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
+});
+
 test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge trajectories', async t => {
     const oldFetch = globalThis.fetch;
     const oldLog = console.log;

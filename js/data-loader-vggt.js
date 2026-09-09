@@ -9,9 +9,8 @@ import { createPointMaterial } from './point-material.js?v=47';
 // annotations (e.g. the final "Assembled ... — <scene>" label). Distinct from
 // `label`, which is the dataset-picker text.
 export const DATASETS = {
-    // The standalone "original" Gerrard Hall dataset is not part of the Brussels
-    // deliverable and its data is excluded from the hosted build, so it is not offered.
     BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
+    original: { label: 'Gerrard Hall', sceneName: 'Gerrard Hall', basePath: 'data/gerrard-hall-vggt/results', useManifest: false, pointScale: 1.0 },
     // `hidden` keeps a dataset reachable by ?dataset=<key> for local verification while
     // leaving it out of the picker. Thanjavur is hidden (and excluded from the hosted
     // build) until its diverged C_2 merges are sorted out.
@@ -146,8 +145,9 @@ export class Cluster {
 
 export class VGGTDataLoader {
     constructor(datasetKey = 'BRUSSELS') {
-        this.dataset = DATASETS[datasetKey] || DATASETS.BRUSSELS;
-        this.datasetKey = DATASETS[datasetKey] ? datasetKey : 'BRUSSELS';
+        if (!Object.hasOwn(DATASETS, datasetKey)) throw new Error(`Unknown dataset: ${datasetKey}`);
+        this.dataset = DATASETS[datasetKey];
+        this.datasetKey = datasetKey;
         this.basePath = this.dataset.basePath;
         this.clusters = new Map();
         this.root = null;

@@ -279,7 +279,7 @@
         </div>
         <div class="demo-hint">
             <span>Drag to orbit &middot; scroll to zoom &middot; right-drag to pan &middot; click the timeline to jump between merge events</span>
-            <a href="hierarchy-vggt.html?dataset=BRUSSELS" target="_blank">Open the full visualizer with all controls &nearr;</a>
+            <a id="demo-full-link" href="hierarchy-vggt.html?dataset=BRUSSELS" target="_blank">Open the full visualizer with all controls &nearr;</a>
         </div>
     </div>
 </section>
@@ -421,11 +421,13 @@
 
 <script>
     const frame = document.getElementById('demo-frame');
+    const fullLink = document.getElementById('demo-full-link');
     document.querySelectorAll('.demo-tab').forEach(tab => {
         tab.addEventListener('click', () => {
             document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
             frame.src = `hierarchy-vggt.html?dataset=${tab.dataset.dataset}&embed=1&v=4`;
+            fullLink.href = `hierarchy-vggt.html?dataset=${tab.dataset.dataset}`;
         });
     });
 </script>
