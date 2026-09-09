@@ -989,10 +989,9 @@ class VGGTHierarchyApp {
 
     fitCameraToVisible(instant = false) {
         if (!this.shouldAutoFrame()) return;
-        // Fixed-frame mode: never chase the visible set event-by-event. The whole
-        // floorplan is already framed (set on start / on toggle), and the finale is
-        // handled by collapseToFinalView, so the camera stays put through the build.
-        if (this.fixedFrame) return;
+        // Fixed-frame mode: don't chase individual clusters. Instead ease out to the
+        // region the build has reached so far, which only ever grows.
+        if (this.fixedFrame) { this.fitCameraToLayoutBounds(); return; }
         if (!this.events || this.events.length === 0) return;
 
         const visible = new Set();
@@ -1165,16 +1164,91 @@ class VGGTHierarchyApp {
         return { minX, maxX, minY, maxY };
     }
 
+    /**
+     * Smallest fraction of the full layout the progressive frame will ever show, so
+     * the first cluster or two don't fill the screen at an absurd zoom and the
+     * subsequent zoom-out stays gradual.
+     */
+    static PROGRESSIVE_MIN_FRAC = 0.4;
+
+    /**
+     * Union of the tiles of every cluster that has arrived by the current event,
+     * merged into a frame that only ever GROWS. Framing this instead of the full
+     * layout keeps arrived clusters filling the screen (rather than sitting in one
+     * corner of a rectangle reserved for all 40), while the monotonic growth means
+     * the camera only ever eases outward - it never snaps back and forth as the
+     * active region moves, which is what made the per-event framing feel unstable.
+     */
+    updateProgressiveBounds() {
+        const full = (this.layoutEngine && this.layoutEngine.bounds) || this.computeLayoutContentBounds();
+        if (!full || !this.events || !this.events.length) return full;
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        const add = (cluster) => {
+            if (!cluster || !cluster.hierarchyPosition) return;
+            // Its tile (merged nodes carry a mergeRegion instead of a leaf tile)...
+            const r = cluster.rect || cluster.mergeRegion;
+            if (r) {
+                minX = Math.min(minX, r.x); maxX = Math.max(maxX, r.x + r.w);
+                minY = Math.min(minY, r.y); maxY = Math.max(maxY, r.y + r.h);
+            }
+            // ...and its real point extent, since tiles are only filled to FIT_FRAC and
+            // a cluster's outer points reach past its tile edge.
+            const ext = this.computeRobustExtent(cluster, cluster.fitScale || 1);
+            if (ext) {
+                const px = cluster.hierarchyPosition.x, py = cluster.hierarchyPosition.y;
+                minX = Math.min(minX, px + ext.cx - ext.halfW);
+                maxX = Math.max(maxX, px + ext.cx + ext.halfW);
+                minY = Math.min(minY, py + ext.cy - ext.halfH);
+                maxY = Math.max(maxY, py + ext.cy + ext.halfH);
+            }
+        };
+        const upto = Math.min(this.currentEventIndex, this.events.length - 1);
+        for (let i = 0; i <= upto; i++) {
+            const evt = this.events[i];
+            if (!evt) continue;
+            add(evt.cluster);
+            if (!evt.isLeaf && evt.children) {
+                for (const p of evt.children) add(this.dataLoader.clusters.get(p));
+            }
+        }
+        if (minX === Infinity) return full;
+
+        // Never show less than PROGRESSIVE_MIN_FRAC of the layout, keeping the
+        // layout's aspect so the expansion reads as a straight zoom-out.
+        const fullW = full.maxX - full.minX, fullH = full.maxY - full.minY;
+        const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        const minW = fullW * VGGTHierarchyApp.PROGRESSIVE_MIN_FRAC;
+        const minH = fullH * VGGTHierarchyApp.PROGRESSIVE_MIN_FRAC;
+        let w = Math.max(maxX - minX, minW), h = Math.max(maxY - minY, minH);
+        let box = { minX: cx - w / 2, maxX: cx + w / 2, minY: cy - h / 2, maxY: cy + h / 2 };
+
+        // Monotonic: absorb whatever we have already shown so the frame only grows.
+        const prev = this.progressiveBounds;
+        if (prev) {
+            box = {
+                minX: Math.min(box.minX, prev.minX), maxX: Math.max(box.maxX, prev.maxX),
+                minY: Math.min(box.minY, prev.minY), maxY: Math.max(box.maxY, prev.maxY)
+            };
+        }
+        // Clamp to the full layout so we never frame empty space beyond it.
+        box = {
+            minX: Math.max(box.minX, full.minX), maxX: Math.min(box.maxX, full.maxX),
+            minY: Math.max(box.minY, full.minY), maxY: Math.min(box.maxY, full.maxY)
+        };
+        this.progressiveBounds = box;
+        return box;
+    }
+
     fitCameraToLayoutBounds(instant = false) {
         if (!this.shouldAutoFrame()) return;
-        // Frame the FIXED layout rectangle (the union of every leaf tile). By
-        // construction this rect contains every cluster's tile, and the full-extent
-        // fit (robustXYExtent ~99.4% + FIT_FRAC) keeps each cluster's body inside its
-        // own tile - so framing this rect guarantees nothing is ever off-screen for
-        // the entire build. We deliberately do NOT frame the trimmed content bounds
-        // here (that shifts with whatever has arrived and can push edge clusters off
-        // frame); Lock Frame holds this one rect from load through the final model.
-        const b = (this.layoutEngine && this.layoutEngine.bounds) || this.computeLayoutContentBounds();
+        // Frame the region the build has actually reached (see updateProgressiveBounds).
+        // The frame is stable in the sense that matters - it never chases individual
+        // clusters and never zooms back in - but it does expand as new branches of the
+        // tree activate, so early frames are filled instead of showing 11 clusters in
+        // the corner of a rectangle sized for all 40. By the final event the region has
+        // grown to the whole layout, so the assembled model is framed exactly as before.
+        const b = this.updateProgressiveBounds();
         if (!b) return;
 
         const pad = 2;
@@ -1358,6 +1432,9 @@ class VGGTHierarchyApp {
         this.undoFinalView();
         this.animationEngine.hideTransitionClouds();
         this.animationEngine.activeAnimations = [];
+        // Let the progressive frame shrink back to the opening region; it is otherwise
+        // monotonic, so without this a replay would start already zoomed all the way out.
+        this.progressiveBounds = null;
         this.jumpTo(0);
     }
 
