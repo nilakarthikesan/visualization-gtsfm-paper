@@ -4,7 +4,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=52';
+import { VGGTDataLoader, DATASETS } from './data-loader-vggt.js?v=53';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=50';
 import { InteractionEngine } from './interaction-engine.js?v=6';
 import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=47';
@@ -746,6 +746,8 @@ class VGGTHierarchyApp {
         if (!select) return;
 
         for (const [key, ds] of Object.entries(DATASETS)) {
+            // Hidden datasets stay reachable via ?dataset=<key> but are not offered.
+            if (ds.hidden && key !== this.datasetKey) continue;
             const opt = document.createElement('option');
             opt.value = key;
             opt.textContent = ds.label;

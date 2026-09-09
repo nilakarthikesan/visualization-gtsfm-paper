@@ -9,3 +9,6 @@ data/gerrard-hall-vggt-v2/C_4
 data/gerrard-hall-vggt-v2/merged_retriangulated
 # The standalone "original" Gerrard Hall dataset is not part of the Brussels deliverable.
 data/gerrard-hall-vggt
+# Thanjavur is held back until its diverged C_2 merges are verified (several of its
+# intermediate point files contain coordinates up to 1e75, which collapse the scene).
+data/thanjavur-vggt

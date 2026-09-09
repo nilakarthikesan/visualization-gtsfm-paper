@@ -12,7 +12,10 @@ export const DATASETS = {
     // The standalone "original" Gerrard Hall dataset is not part of the Brussels
     // deliverable and its data is excluded from the hosted build, so it is not offered.
     BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
-    THANJAVUR: { label: 'Thanjavur (temple)', sceneName: 'Thanjavur (Brihadeeswarar Temple)', basePath: 'data/thanjavur-vggt', useManifest: true, pointScale: 0.4 },
+    // `hidden` keeps a dataset reachable by ?dataset=<key> for local verification while
+    // leaving it out of the picker. Thanjavur is hidden (and excluded from the hosted
+    // build) until its diverged C_2 merges are sorted out.
+    THANJAVUR: { label: 'Thanjavur (temple)', sceneName: 'Thanjavur (Brihadeeswarar Temple)', basePath: 'data/thanjavur-vggt', useManifest: true, pointScale: 0.4, hidden: true },
     C_1: { label: 'C_1 (deep tree)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_1', useManifest: true, pointScale: 0.4 },
     C_2: { label: 'C_2', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_2', useManifest: true, pointScale: 0.4 },
     C_3: { label: 'C_3', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_3', useManifest: true, pointScale: 0.4 }
