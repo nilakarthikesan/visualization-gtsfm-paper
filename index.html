@@ -65,6 +65,7 @@
         color: var(--ink-soft);
         margin-bottom: 6px;
     }
+    .authors span { display: inline-block; }
     .affil { font-size: 14px; color: var(--ink-faint); margin-bottom: 30px; }
     .btn-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
     .btn {
@@ -230,14 +231,27 @@
 
 <header class="wrap">
     <a class="venue-badge" href="https://sfm-dl.fbk.eu/" target="_blank" rel="noopener">Structure-from-Motion in the Age of Deep Learning &middot; ECCV 2026 Workshop</a>
-    <h1>Hierarchical Structure-from-Motion Scales FeedForward Reconstruction</h1>
-    <div class="authors">Kathirvel Gounder &middot; Harneet Singh Khanuja &middot; Akshay Krishnan &middot; Xinan Zhang &middot; Travis Driver &middot; Nila Karthikesan &middot; Zongyue Liu &middot; Shicong Ma &middot; Frank Dellaert</div>
-    <div class="affil">Presented at the ECCV 2026 SfM-DL Workshop, Malm&ouml;, Sweden &middot; Poster #380</div>
+    <h1>Hierarchical Structure-from-Motion Scales Feedforward Reconstruction</h1>
+    <div class="authors">
+        <span>Kathirvel Gounder<sup>*</sup>,</span>
+        <span>Harneet Singh Khanuja<sup>*</sup>,</span>
+        <span>Akshay Krishnan<sup>*</sup>,</span>
+        <span>Xinan Zhang<sup>*</sup>,</span>
+        <span>Travis Driver,</span>
+        <span>Nila Karthikesan,</span>
+        <span>Zongyue Liu,</span>
+        <span>Shicong Ma,</span>
+        <span>and Frank Dellaert</span>
+    </div>
+    <div class="affil">
+        Georgia Institute of Technology, Atlanta, GA, USA<br>
+        <sup>*</sup> Equal contribution<br>
+        Presented at the ECCV 2026 SfM-DL Workshop, Malm&ouml;, Sweden &middot; Poster #380
+    </div>
     <div class="btn-row">
-        <!-- TODO: point Paper at the camera-ready PDF (ECVA/arXiv) once Kathir shares it. -->
         <a class="btn primary" href="#demo">&#9654;&nbsp; Interactive Demo</a>
-        <a class="btn" href="https://sfm-dl.fbk.eu/" target="_blank" rel="noopener" title="Workshop program; camera-ready PDF link coming">&#128196;&nbsp; Paper</a>
-        <a class="btn" href="https://github.com/nilakarthikesan/visualization-gtsfm-paper">&#11088;&nbsp; Code &amp; Data</a>
+        <a class="btn" href="assets/Gounder26sfmdl_hierarchicalSfM.pdf">&#128196;&nbsp; Paper</a>
+        <a class="btn" href="https://github.com/borglab/gtsfm">&#11088;&nbsp; Code &amp; Data</a>
     </div>
     <div class="tldr">
         <strong>TL;DR:</strong> We partition the verified view graph with nested dissection, reconstruct each
@@ -386,20 +400,21 @@
     <div class="wrap">
         <h2>BibTeX</h2>
         <pre class="bibtex">@inproceedings{gounder2026hierarchical,
-  title     = {Hierarchical Structure-from-Motion Scales FeedForward Reconstruction},
+  title     = {Hierarchical Structure-from-Motion Scales Feedforward Reconstruction},
   author    = {Gounder, Kathirvel and Khanuja, Harneet Singh and Krishnan, Akshay
                and Zhang, Xinan and Driver, Travis and Karthikesan, Nila
                and Liu, Zongyue and Ma, Shicong and Dellaert, Frank},
   booktitle = {European Conference on Computer Vision (ECCV) Workshop on
                Structure-from-Motion in the Age of Deep Learning (SfM-DL)},
-  year      = {2026}
+  year      = {2026},
+  url       = {https://nilakarthikesan.github.io/visualization-gtsfm-paper/assets/Gounder26sfmdl_hierarchicalSfM.pdf}
 }</pre>
     </div>
 </section>
 
 <footer>
     <div class="wrap">
-        Visualization &amp; site: <a href="https://github.com/nilakarthikesan/visualization-gtsfm-paper">github.com/nilakarthikesan/visualization-gtsfm-paper</a>
+        <a href="https://github.com/nilakarthikesan/visualization-gtsfm-paper">Visualization &amp; web-page code</a>
         &middot; Built with Three.js
     </div>
 </footer>
