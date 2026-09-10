@@ -225,6 +225,21 @@ test('look-ahead packing avoids leaf-count slivers in a 16-leaf caterpillar', ()
     }
 });
 
+test('merge-aware packing preserves the original Brussels wide-merge regression', async () => {
+    // Freeze only the old export's measured shapes: replacing the demo dataset
+    // must not silently remove this regression or require retaining its clouds.
+    const fixture = JSON.parse(await fs.readFile(new URL('./fixtures/brussels-layout-shapes.json', import.meta.url)));
+    const nodes = new Map(fixture.clusters.map(c => [c.path, { ...c, children: [] }]));
+    for (const c of fixture.clusters) nodes.get(c.path).children = c.children.map(path => nodes.get(path));
+    const rectangles = planFloorplan(nodes.get('merged'), n => n.aspect,
+        { x: 0, y: 0, w: 900 * fixture.viewportAspect, h: 900 });
+    const wideMerge = nodes.get('C_1/C_1_1/merged');
+    const rect = rectangles.get(wideMerge);
+    const cellAspect = rect.w / rect.h;
+    assert.ok(Math.min(cellAspect / wideMerge.aspect, wideMerge.aspect / cellAspect) > .75,
+        'wide merged reconstruction still inherits a tall cell');
+});
+
 test('Gerrard Hall selection loads its own data and completes its nine-event hierarchy', async () => {
     assert.throws(() => new VGGTDataLoader('missing-scene'), /Unknown dataset/);
     assert.throws(() => new VGGTDataLoader('toString'), /Unknown dataset/);
@@ -282,17 +297,18 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
         const layout = new SquarenessLayoutEngine(clusters);
         layout.computeLayout();
         const root = clusters.get('merged');
-        assert.equal(layout.treeNodes.length,93);
-        // This wide, intermediate reconstruction previously inherited a tall
-        // cell: its footprint occupied only about 24% of the reserved area.
-        // Score merge stages as well as leaves, without changing the geometry.
+        assert.equal(layout.treeNodes.length,54);
+        // The cold-run tree used to reserve a 6.28:1 band for this 2.97:1
+        // reconstruction (47% fill). Refine the split in the actual viewport.
         const wideMerge = clusters.get('C_1/C_1_1/merged');
         const footprintAspect = wideMerge.layoutExtent.w / wideMerge.layoutExtent.h;
         const cellAspect = wideMerge.rect.w / wideMerge.rect.h;
         assert.ok(Math.min(cellAspect / footprintAspect, footprintAspect / cellAspect) > .75,
-            'wide merged reconstruction still inherits a tall cell');
+            'cold-run merge still wastes more than a quarter of its rectangle');
         const engine = new SquarenessAnimationEngine(clusters,layout,world);
         const events = engine.initTimeline();
+        assert.equal(events.filter(e => e.isLeaf).length,25);
+        assert.equal(events.filter(e => !e.isLeaf).length,29);
         const convergence = new ConvergenceEngine();
         engine.convergenceEngine = convergence;
         convergence.prepareAllLeaves(engine.getLeafClusters());
@@ -357,8 +373,45 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
             }
             if (size===0) assert.ok([...clusters.values()].every(c=>!c.frustumGeometry));
         }
-        t.diagnostic('Verified 93 events, 40 reveals, 53 merges, and at least 95% point and camera-wireframe coverage.');
+        t.diagnostic('Verified 54 events, 25 reveals, 29 merges, and at least 95% point and camera-wireframe coverage.');
         verifyDefaultPlayback(clusters, engine, events);
+    } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
+});
+
+test('Thanjavur refinement keeps responsive layouts readable, contained, and deterministic', async () => {
+    const oldFetch = globalThis.fetch, oldLog = console.log;
+    globalThis.fetch = async path => {
+        try { return new Response(await fs.readFile(new URL('../'+path, import.meta.url))); }
+        catch(err) { if (err.code === 'ENOENT') return new Response('', {status:404}); throw err; }
+    };
+    console.log = () => {};
+    try {
+        const loader = new VGGTDataLoader('THANJAVUR');
+        const clusters = await loader.load();
+        await new FrustumEngine(new THREE.Group()).loadForClusters(clusters, loader);
+        const layout = new SquarenessLayoutEngine(clusters);
+        for (const aspect of [16/9, 1, 9/16]) {
+            layout.viewportAspect = aspect;
+            layout.computeLayout();
+            const fills = [];
+            for (const c of clusters.values()) {
+                if (c.pointCloud) checkPoints(c);
+                if (c.frustumGeometry) checkPoints(c, c.rect, c.frustumGeometry.attributes.position);
+                for (const child of c.children) contains(c.rect, child.rect);
+                for (let a = 0; a < c.children.length; a++) for (let b = a + 1; b < c.children.length; b++) {
+                    disjoint(c.children[a].rect, c.children[b].rect);
+                }
+                if (c.children.length) {
+                    const ratio = (c.rect.w / c.rect.h) / (c.layoutExtent.w / c.layoutExtent.h);
+                    fills.push(Math.min(ratio, 1 / ratio));
+                }
+            }
+            fills.sort((a,b) => a-b);
+            assert.ok(fills[Math.floor(fills.length / 2)] > .8, 'median merge fill fell below 80%');
+            const first = [...clusters.values()].map(c => ({...c.rect}));
+            layout.computeLayout();
+            assert.deepEqual([...clusters.values()].map(c => c.rect), first);
+        }
     } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
 });
 

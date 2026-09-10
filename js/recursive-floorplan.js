@@ -47,6 +47,9 @@ export function planFloorplan(root, aspectOf, rootRect) {
     };
     const candidates = buildCached(root);
     const rectangles = new Map();
+    // Candidate packs share cached subtrees. Keep refinements outside the packs
+    // so optimizing one candidate cannot change another candidate's layout.
+    let fractions = new Map();
     const assign = (c, available, inherit = false) => {
         // Do not stretch a short leaf into a band alongside a deep subtree.
         // Unused cross-axis space remains reserved to the parent. This trades a
@@ -63,11 +66,11 @@ export function planFloorplan(root, aspectOf, rootRect) {
             rectangles.set(c.node, { ...r });
             if (c.pack) assign(c.pack, r, c.node.children.length === 1);
         } else if (c.axis === 'x') {
-            const w = r.w * c.a.w / (c.a.w + c.b.w);
+            const w = r.w * (fractions.get(c) ?? c.a.w / (c.a.w + c.b.w));
             assign(c.a, { ...r, w });
             assign(c.b, { ...r, x: r.x + w, w: r.w - w });
         } else {
-            const h = r.h * c.a.h / (c.a.h + c.b.h);
+            const h = r.h * (fractions.get(c) ?? c.a.h / (c.a.h + c.b.h));
             assign(c.a, { ...r, h });
             assign(c.b, { ...r, y: r.y + h, h: r.h - h });
         }
@@ -75,18 +78,52 @@ export function planFloorplan(root, aspectOf, rootRect) {
     // The viewport may stretch the envelope's cross-axis during assignment.
     // Rank the surviving plans using their actual allocated rectangles, so a
     // good hypothetical envelope cannot hide a poorly shaped on-screen cell.
-    let bestScore = -Infinity, bestRectangles;
-    for (const candidate of candidates) {
+    const score = candidate => {
         rectangles.clear();
         assign(candidate, rootRect);
-        let score = 0;
+        let total = 0;
         for (const [node, r] of rectangles) {
             const aspect = Math.max(1e-6, aspectOf(node));
             const scale = Math.min(r.w / Math.sqrt(aspect), r.h * Math.sqrt(aspect));
-            score += cache.get(node)[0].leafCount * 2 * Math.log(scale);
+            const fill = scale * scale / (r.w * r.h);
+            const shortfall = Math.max(0, Math.log(0.75 / fill));
+            // Keep displayed area valuable, but discourage sacrificing one
+            // reconstruction's shape for small gains elsewhere in the tree.
+            total += cache.get(node)[0].leafCount * (2 * Math.log(scale) - 4 * shortfall * shortfall);
         }
-        if (score > bestScore) {
-            bestScore = score;
+        return total;
+    };
+    let bestScore = -Infinity, bestRectangles;
+    for (const candidate of candidates) {
+        fractions = new Map();
+        const cuts = [];
+        const collect = c => {
+            if (c.pack) collect(c.pack);
+            else if (c.axis) { cuts.push(c); collect(c.a); collect(c.b); }
+        };
+        collect(candidate);
+        let current = score(candidate);
+        // Coordinate refinement evaluates the whole tree in the real viewport.
+        // Split fractions alone change: containment, disjointness, and the
+        // inherited rectangles of unary merges remain guaranteed by assign().
+        for (const step of [0.2, 0.05, 0.0125]) {
+            for (const cut of cuts) {
+                const initial = fractions.get(cut) ?? (cut.axis === 'x'
+                    ? cut.a.w / (cut.a.w + cut.b.w) : cut.a.h / (cut.a.h + cut.b.h));
+                let bestFraction = initial;
+                for (const offset of [-2, -1, 1, 2]) {
+                    const fraction = initial + offset * step;
+                    if (fraction <= 0 || fraction >= 1) continue;
+                    fractions.set(cut, fraction);
+                    const trial = score(candidate);
+                    if (trial > current + 1e-9) { current = trial; bestFraction = fraction; }
+                }
+                fractions.set(cut, bestFraction);
+            }
+        }
+        if (current > bestScore) {
+            bestScore = current;
+            score(candidate);
             bestRectangles = new Map(rectangles);
         }
     }

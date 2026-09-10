@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { planFloorplan } from './recursive-floorplan.js?v=2';
+import { planFloorplan } from './recursive-floorplan.js?v=3';
 import { centralIndices } from './robust-footprint.js?v=1';
 
 /** Final composition first; every node owns a rectangle throughout the build. */

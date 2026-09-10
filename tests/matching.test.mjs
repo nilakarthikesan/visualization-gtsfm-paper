@@ -214,15 +214,16 @@ test('fallback-only playback keeps its deadline even while recording and after w
     assert.equal(service.disabled,true);
 });
 
-test('real dataset matching preserves hashes captured from main before extraction', async () => {
+test('real dataset matching preserves pinned export hashes', async () => {
     const oldFetch = globalThis.fetch, oldLog = console.log;
     globalThis.fetch = async path => {try {return new Response(await fs.readFile(new URL('../'+path,import.meta.url)));} catch {return new Response('',{status:404});}};
     console.log = () => {};
     try {
         const cases = [
             ['original', [['merged','3de6288634b597ccdd134c20a3398a8aea4d18a30a48d4ccb7d20d19b7b0faa3']]],
-            ['BRUSSELS', [['merged','e4360c2aed896f52015ad5c3ea1ea13c049397469192431a6d6532e24439b8fe'],
-                ['C_1/C_1_2/merged','044a303830bcbc5d0e096820ab32eb8838d98e22a05236c4c52ef5f1c46aec2f']]]
+            // Cold single-session Brussels export introduced in PR #8 (4c23852).
+            ['BRUSSELS', [['merged','2a368980efcf957bee3846630e8b48b4146ca3333eb1d2eeec45499dfa17a1bd'],
+                ['C_1/C_1_2/merged','fe947fe5a52cf685553fa1d85c858fef8875482a0a585ed39084b941c01ecf0a']]]
         ];
         for (const [key, merges] of cases) {
             const loader = new VGGTDataLoader(key);
