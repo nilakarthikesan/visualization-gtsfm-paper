@@ -8,7 +8,8 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=57';
 import { MatchingCoordinator, matchingPriorities } from './matching-coordinator.js?v=1';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
-import { LayoutGuides } from './layout-guides.js?v=4';
+import { LayoutGuides } from './layout-guides.js?v=5';
+import { recordingFilename, drawRecordingFrame } from './canvas-recording.js?v=1';
 import { bindRegionClip } from './region-clipping.js?v=1';
 import { InteractionEngine } from './interaction-engine.js?v=6';
 import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=49';
@@ -394,7 +395,7 @@ export class VGGTHierarchyApp {
         this.initVisualSettingsUI();
 
         this.mediaRecorder = null;
-        this.recordedChunks = [];
+        this.recordingContext = null;
 
         window.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
@@ -1249,35 +1250,51 @@ export class VGGTHierarchyApp {
     toggleRecording() {
         if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
             this.mediaRecorder.stop();
-            this.ui.recordBtn.textContent = 'Record';
-            this.ui.recordBtn.classList.remove('recording');
+            this.ui.recordBtn.disabled = true;
             return;
         }
 
-        this.recordedChunks = [];
-        const canvas = this.renderer.domElement;
+        // A separate canvas combines the WebGL scene and visible region overlays.
+        const canvas = document.createElement('canvas');
+        canvas.width = this.renderer.domElement.width;
+        canvas.height = this.renderer.domElement.height;
+        this.recordingContext = canvas.getContext('2d');
+        this.composer.render();
+        drawRecordingFrame(this.recordingContext, this.renderer.domElement, this.layoutGuides);
         const stream = canvas.captureStream(30);
-        this.mediaRecorder = new MediaRecorder(stream, {
-            mimeType: 'video/webm;codecs=vp9',
+        const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4']
+            .find(type => MediaRecorder.isTypeSupported(type));
+        const recorder = new MediaRecorder(stream, {
+            ...(mimeType ? { mimeType } : {}),
             videoBitsPerSecond: 5000000
         });
+        this.mediaRecorder = recorder;
+        const chunks = [];
+        const filename = recordingFilename(this.datasetKey, new Date(), recorder.mimeType);
 
-        this.mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) this.recordedChunks.push(e.data);
+        recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) chunks.push(e.data);
         };
 
-        this.mediaRecorder.onstop = () => {
-            const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
+        recorder.onstop = () => {
+            stream.getTracks().forEach(track => track.stop());
+            this.recordingContext = null;
+            this.mediaRecorder = null;
+            this.ui.recordBtn.disabled = false;
+            this.ui.recordBtn.textContent = 'Record';
+            this.ui.recordBtn.classList.remove('recording');
+            const blob = new Blob(chunks, { type: recorder.mimeType });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            a.download = `gerrard-hall-recording-${timestamp}.webm`;
+            a.download = filename;
+            document.body.appendChild(a);
             a.click();
-            URL.revokeObjectURL(url);
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
         };
 
-        this.mediaRecorder.start();
+        recorder.start();
         this.ui.recordBtn.textContent = 'Stop';
         this.ui.recordBtn.classList.add('recording');
     }
@@ -1458,6 +1475,9 @@ export class VGGTHierarchyApp {
         this.orbitControls.update();
         this.layoutGuides?.update(this.camera, this.events, this.currentEventIndex, this.showLayoutGuides, this.showNodeLabels);
         this.composer.render();
+        if (this.mediaRecorder?.state === 'recording') {
+            drawRecordingFrame(this.recordingContext, this.renderer.domElement, this.layoutGuides);
+        }
     }
 }
 
