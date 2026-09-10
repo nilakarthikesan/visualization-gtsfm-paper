@@ -225,6 +225,21 @@ test('look-ahead packing avoids leaf-count slivers in a 16-leaf caterpillar', ()
     }
 });
 
+test('merge-aware packing preserves the original Brussels wide-merge regression', async () => {
+    // Freeze only the old export's measured shapes: replacing the demo dataset
+    // must not silently remove this regression or require retaining its clouds.
+    const fixture = JSON.parse(await fs.readFile(new URL('./fixtures/brussels-layout-shapes.json', import.meta.url)));
+    const nodes = new Map(fixture.clusters.map(c => [c.path, { ...c, children: [] }]));
+    for (const c of fixture.clusters) nodes.get(c.path).children = c.children.map(path => nodes.get(path));
+    const rectangles = planFloorplan(nodes.get('merged'), n => n.aspect,
+        { x: 0, y: 0, w: 900 * fixture.viewportAspect, h: 900 });
+    const wideMerge = nodes.get('C_1/C_1_1/merged');
+    const rect = rectangles.get(wideMerge);
+    const cellAspect = rect.w / rect.h;
+    assert.ok(Math.min(cellAspect / wideMerge.aspect, wideMerge.aspect / cellAspect) > .75,
+        'wide merged reconstruction still inherits a tall cell');
+});
+
 test('Gerrard Hall selection loads its own data and completes its nine-event hierarchy', async () => {
     assert.throws(() => new VGGTDataLoader('missing-scene'), /Unknown dataset/);
     assert.throws(() => new VGGTDataLoader('toString'), /Unknown dataset/);
@@ -282,17 +297,11 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
         const layout = new SquarenessLayoutEngine(clusters);
         layout.computeLayout();
         const root = clusters.get('merged');
-        assert.equal(layout.treeNodes.length,93);
-        // This wide, intermediate reconstruction previously inherited a tall
-        // cell: its footprint occupied only about 24% of the reserved area.
-        // Score merge stages as well as leaves, without changing the geometry.
-        const wideMerge = clusters.get('C_1/C_1_1/merged');
-        const footprintAspect = wideMerge.layoutExtent.w / wideMerge.layoutExtent.h;
-        const cellAspect = wideMerge.rect.w / wideMerge.rect.h;
-        assert.ok(Math.min(cellAspect / footprintAspect, footprintAspect / cellAspect) > .75,
-            'wide merged reconstruction still inherits a tall cell');
+        assert.equal(layout.treeNodes.length,54);
         const engine = new SquarenessAnimationEngine(clusters,layout,world);
         const events = engine.initTimeline();
+        assert.equal(events.filter(e => e.isLeaf).length,25);
+        assert.equal(events.filter(e => !e.isLeaf).length,29);
         const convergence = new ConvergenceEngine();
         engine.convergenceEngine = convergence;
         convergence.prepareAllLeaves(engine.getLeafClusters());
@@ -357,7 +366,7 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
             }
             if (size===0) assert.ok([...clusters.values()].every(c=>!c.frustumGeometry));
         }
-        t.diagnostic('Verified 93 events, 40 reveals, 53 merges, and at least 95% point and camera-wireframe coverage.');
+        t.diagnostic('Verified 54 events, 25 reveals, 29 merges, and at least 95% point and camera-wireframe coverage.');
         verifyDefaultPlayback(clusters, engine, events);
     } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
 });
