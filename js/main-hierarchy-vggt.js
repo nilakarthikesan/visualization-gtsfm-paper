@@ -8,7 +8,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=57';
 import { MatchingCoordinator, matchingPriorities } from './matching-coordinator.js?v=1';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
-import { LayoutGuides } from './layout-guides.js?v=3';
+import { LayoutGuides } from './layout-guides.js?v=4';
 import { bindRegionClip } from './region-clipping.js?v=1';
 import { InteractionEngine } from './interaction-engine.js?v=6';
 import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=49';
