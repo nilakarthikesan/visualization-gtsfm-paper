@@ -11,14 +11,16 @@ import { createPointMaterial } from './point-material.js?v=47';
 // `label`, which is the dataset-picker text.
 export const DATASETS = {
     original: { label: 'Gerrard Hall', sceneName: 'Gerrard Hall', basePath: 'data/gerrard-hall-vggt/results', useManifest: false, pointScale: 1.0 },
-    BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
+    // Cold single-session run (2026-09-10; k=120/0.15, Metis 30/70): 2-child root,
+    // 25 leaves + 29 merges, real photo colors, timestamps = the full 53.7 min run clock
+    // including the frontend preamble. The earlier 3-cluster export lives in git history.
+    BRUSSELS: { label: 'Brussels (full: C_1+C_2)', sceneName: 'Grand-Place Brussels', basePath: 'data/brussels-rerun', useManifest: true, pointScale: 0.4 },
     // The diverged C_2 merges (exploded-frame intermediate exports, coords up to 1e75)
     // were re-seated from their sane child exports on 2026-09-09
     // (paperresults/scripts/thanjavur_viz_reseat.py), so Thanjavur is offered again.
     THANJAVUR: { label: 'Thanjavur (temple)', sceneName: 'Thanjavur (Brihadeeswarar Temple)', basePath: 'data/thanjavur-vggt', useManifest: true, pointScale: 0.4 },
-    C_1: { label: 'C_1 (deep tree)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_1', useManifest: true, pointScale: 0.4 },
-    C_2: { label: 'C_2', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_2', useManifest: true, pointScale: 0.4 },
-    C_3: { label: 'C_3', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_3', useManifest: true, pointScale: 0.4 }
+    // C_2 of this run is a single leaf (no merges), so only the C_1 branch is offered on its own.
+    C_1: { label: 'C_1 (deep tree)', sceneName: 'Grand-Place Brussels', basePath: 'data/brussels-rerun/C_1', useManifest: true, pointScale: 0.4 }
     // C_4 (the "community photo collection") was removed: per Kathir, Dubrovnik
     // was never reconstructed successfully, so it should not be shown.
 };
