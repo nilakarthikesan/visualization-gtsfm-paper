@@ -7,7 +7,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=58';
 import { MatchingCoordinator, matchingPriorities } from './matching-coordinator.js?v=1';
-import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
+import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=54';
 import { LayoutGuides } from './layout-guides.js?v=5';
 import { recordingFilename, drawRecordingFrame } from './canvas-recording.js?v=1';
 import { bindRegionClip } from './region-clipping.js?v=1';

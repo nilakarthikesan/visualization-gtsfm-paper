@@ -298,6 +298,13 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
         layout.computeLayout();
         const root = clusters.get('merged');
         assert.equal(layout.treeNodes.length,54);
+        // The cold-run tree used to reserve a 6.28:1 band for this 2.97:1
+        // reconstruction (47% fill). Refine the split in the actual viewport.
+        const wideMerge = clusters.get('C_1/C_1_1/merged');
+        const footprintAspect = wideMerge.layoutExtent.w / wideMerge.layoutExtent.h;
+        const cellAspect = wideMerge.rect.w / wideMerge.rect.h;
+        assert.ok(Math.min(cellAspect / footprintAspect, footprintAspect / cellAspect) > .75,
+            'cold-run merge still wastes more than a quarter of its rectangle');
         const engine = new SquarenessAnimationEngine(clusters,layout,world);
         const events = engine.initTimeline();
         assert.equal(events.filter(e => e.isLeaf).length,25);
@@ -368,6 +375,43 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
         }
         t.diagnostic('Verified 54 events, 25 reveals, 29 merges, and at least 95% point and camera-wireframe coverage.');
         verifyDefaultPlayback(clusters, engine, events);
+    } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
+});
+
+test('Thanjavur refinement keeps responsive layouts readable, contained, and deterministic', async () => {
+    const oldFetch = globalThis.fetch, oldLog = console.log;
+    globalThis.fetch = async path => {
+        try { return new Response(await fs.readFile(new URL('../'+path, import.meta.url))); }
+        catch(err) { if (err.code === 'ENOENT') return new Response('', {status:404}); throw err; }
+    };
+    console.log = () => {};
+    try {
+        const loader = new VGGTDataLoader('THANJAVUR');
+        const clusters = await loader.load();
+        await new FrustumEngine(new THREE.Group()).loadForClusters(clusters, loader);
+        const layout = new SquarenessLayoutEngine(clusters);
+        for (const aspect of [16/9, 1, 9/16]) {
+            layout.viewportAspect = aspect;
+            layout.computeLayout();
+            const fills = [];
+            for (const c of clusters.values()) {
+                if (c.pointCloud) checkPoints(c);
+                if (c.frustumGeometry) checkPoints(c, c.rect, c.frustumGeometry.attributes.position);
+                for (const child of c.children) contains(c.rect, child.rect);
+                for (let a = 0; a < c.children.length; a++) for (let b = a + 1; b < c.children.length; b++) {
+                    disjoint(c.children[a].rect, c.children[b].rect);
+                }
+                if (c.children.length) {
+                    const ratio = (c.rect.w / c.rect.h) / (c.layoutExtent.w / c.layoutExtent.h);
+                    fills.push(Math.min(ratio, 1 / ratio));
+                }
+            }
+            fills.sort((a,b) => a-b);
+            assert.ok(fills[Math.floor(fills.length / 2)] > .8, 'median merge fill fell below 80%');
+            const first = [...clusters.values()].map(c => ({...c.rect}));
+            layout.computeLayout();
+            assert.deepEqual([...clusters.values()].map(c => c.rect), first);
+        }
     } finally { globalThis.fetch = oldFetch; console.log = oldLog; }
 });
 
