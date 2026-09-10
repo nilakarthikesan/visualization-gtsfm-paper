@@ -83,4 +83,38 @@ export class LayoutGuides {
             label.hidden = !showLabels || w < 50 || h < 24;
         }
     }
+
+    // The on-screen guides are DOM overlays, so canvas.captureStream cannot see
+    // them. Reuse their current geometry and computed styles in the video layer.
+    drawToCanvas(context) {
+        if (this.container.hidden) return;
+        for (const { el, label } of this.entries) {
+            if (el.hidden) continue;
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            const border = parseFloat(style.borderTopWidth);
+            context.fillStyle = style.backgroundColor;
+            context.fillRect(rect.left, rect.top, rect.width, rect.height);
+            context.strokeStyle = style.borderTopColor;
+            context.lineWidth = border;
+            if (border > 0) context.strokeRect(rect.left + border / 2, rect.top + border / 2,
+                Math.max(0, rect.width - border), Math.max(0, rect.height - border));
+            if (label.hidden) continue;
+            const labelRect = label.getBoundingClientRect();
+            const labelStyle = getComputedStyle(label);
+            context.save();
+            context.beginPath();
+            context.rect(labelRect.left, labelRect.top, labelRect.width, labelRect.height);
+            context.clip();
+            context.fillStyle = labelStyle.backgroundColor;
+            context.fillRect(labelRect.left, labelRect.top, labelRect.width, labelRect.height);
+            context.font = labelStyle.font;
+            context.textBaseline = 'top';
+            context.fillStyle = labelStyle.color;
+            context.fillText(label.textContent,
+                labelRect.left + parseFloat(labelStyle.paddingLeft),
+                labelRect.top + parseFloat(labelStyle.paddingTop));
+            context.restore();
+        }
+    }
 }
