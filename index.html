@@ -220,6 +220,15 @@
         text-align: center;
     }
     footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+    .dataset-credits {
+        margin-bottom: 28px;
+        text-align: left;
+        color: var(--ink-soft);
+    }
+    .dataset-credits h2 { font-size: 20px; margin-bottom: 12px; }
+    .dataset-credits ul { padding-left: 20px; margin: 12px 0; }
+    .dataset-credits li + li { margin-top: 10px; }
 
     @media (max-width: 640px) {
         .demo-frame-wrap iframe { height: 648px; }
@@ -417,6 +426,28 @@
 
 <footer>
     <div class="wrap">
+        <div class="dataset-credits" aria-labelledby="dataset-credits-heading">
+            <h2 id="dataset-credits-heading">Dataset provenance &amp; acknowledgments</h2>
+            <p>We thank the researchers and photographers who made these image collections available.
+                The reconstructions displayed here were generated with GTSfM.</p>
+            <ul>
+                <li><strong>Grand-Place Brussels</strong> comes from the PhotoTourism collections in
+                    <a href="https://www.kaggle.com/competitions/image-matching-challenge-2023">Image Matching Challenge 2023</a>
+                    (Chow et al., 2023), cited as reference [8] in our paper.</li>
+                <li><strong>Gerrard Hall</strong> is distributed through the
+                    <a href="https://colmap.github.io/datasets.html">COLMAP datasets</a>.
+                    It is the &ldquo;Theatre&rdquo; scene in Cohen, Sch&ouml;nberger, Speciale, Sattler,
+                    Frahm, and Pollefeys,
+                    <a href="https://cvg.ethz.ch/research/indoor_outdoor_3D_reconstruction_alignment"><cite>Indoor-Outdoor 3D Reconstruction Alignment</cite></a>
+                    (ECCV 2016).</li>
+                <li><strong>Thanjavur (Brihadeeswarar Temple)</strong> was reconstructed from images
+                    collected from Wikimedia. We thank the contributing photographers for sharing their work.</li>
+            </ul>
+            <p>The paper also evaluates on the
+                <a href="https://www.cs.cornell.edu/projects/1dsfm/">1DSfM collections</a>:
+                Wilson and Snavely, <cite>Robust Global Translations with 1DSfM</cite>
+                (ECCV 2014), reference [41].</p>
+        </div>
         <a href="https://github.com/nilakarthikesan/visualization-gtsfm-paper">Visualization &amp; web-page code</a>
         &middot; Built with Three.js
     </div>
