@@ -61,7 +61,30 @@ pip install pillow numpy
 python3 colorize_points.py --images <photo_dir> --recursive data/gerrard-hall-vggt-v2
 ```
 
-The script samples each 3D point's track observations from the photos (the same way COLMAP assigns point colors) and rewrites `points3D.txt` in place (backup kept as `.bak`). The app needs no changes afterwards - it uses real colors automatically when they exist.
+The script samples each 3D point's track observations from the photos (the same way COLMAP assigns point colors) and rewrites `points3D.txt` in place (backup kept as `.bak`). Run colorization on the original export before stripping tracks; the web copies below no longer contain those observations. The app needs no changes afterwards - it uses real colors automatically when they exist.
+
+## Track-free web exports
+
+The Gerrard Hall, Brussels, and Thanjavur web datasets omit COLMAP track observations.
+The viewer uses point coordinates and colors, camera poses, and spatial point matching;
+it does not use observation tracks. When preparing updated exports:
+
+- Keep the first eight fields of every `points3D.txt` row: `POINT3D_ID X Y Z R G B ERROR`. Remove the trailing `IMAGE_ID POINT2D_IDX` pairs.
+- Preserve each `images.txt` pose row and replace its following `POINTS2D` row with an empty line, using `scripts/strip_image_tracks.py`. The empty line is required by the camera parsers.
+- Preserve `cameras.txt`, manifests, timestamps, and existing point colors.
+
+Across the files loaded by each dataset, removing tracks reduces combined
+`points3D.txt` and `images.txt` sizes as follows (decimal MB):
+
+| Dataset | Text before → after | Gzip before → after |
+|---|---:|---:|
+| Gerrard Hall | 6.26 → 1.15 MB | 2.71 → 0.54 MB |
+| Brussels | 86.06 → 44.80 MB | 35.41 → 20.26 MB |
+| Thanjavur | 140.24 → 88.62 MB | 58.82 → 40.07 MB |
+
+Gzip figures sum files compressed individually at level 6; actual HTTP transfer sizes
+may differ. GitHub Pages already serves the point text with gzip compression, which
+browsers decode automatically, so no custom client decompressor is needed.
 
 ## Adding the fine optimization-points dataset
 
