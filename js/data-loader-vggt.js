@@ -11,10 +11,10 @@ import { createPointMaterial } from './point-material.js?v=47';
 export const DATASETS = {
     original: { label: 'Gerrard Hall', sceneName: 'Gerrard Hall', basePath: 'data/gerrard-hall-vggt/results', useManifest: false, pointScale: 1.0 },
     BRUSSELS: { label: 'Brussels (full: C_1+C_2+C_3)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2', useManifest: true, pointScale: 0.4 },
-    // `hidden` keeps a dataset reachable by ?dataset=<key> for local verification while
-    // leaving it out of the picker. Thanjavur is hidden (and excluded from the hosted
-    // build) until its diverged C_2 merges are sorted out.
-    THANJAVUR: { label: 'Thanjavur (temple)', sceneName: 'Thanjavur (Brihadeeswarar Temple)', basePath: 'data/thanjavur-vggt', useManifest: true, pointScale: 0.4, hidden: true },
+    // The diverged C_2 merges (exploded-frame intermediate exports, coords up to 1e75)
+    // were re-seated from their sane child exports on 2026-09-09
+    // (paperresults/scripts/thanjavur_viz_reseat.py), so Thanjavur is offered again.
+    THANJAVUR: { label: 'Thanjavur (temple)', sceneName: 'Thanjavur (Brihadeeswarar Temple)', basePath: 'data/thanjavur-vggt', useManifest: true, pointScale: 0.4 },
     C_1: { label: 'C_1 (deep tree)', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_1', useManifest: true, pointScale: 0.4 },
     C_2: { label: 'C_2', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_2', useManifest: true, pointScale: 0.4 },
     C_3: { label: 'C_3', sceneName: 'Grand-Place Brussels', basePath: 'data/gerrard-hall-vggt-v2/C_3', useManifest: true, pointScale: 0.4 }

@@ -17,6 +17,10 @@ data/gerrard-hall-vggt/results/**/merged_pre_ba
 data/gerrard-hall-vggt/results/**/vggt_pre_ba
 data/gerrard-hall-vggt/results/**/*.pkl
 data/gerrard-hall-vggt/results/**/*.yaml
-# Thanjavur is held back until its diverged C_2 merges are verified (several of its
-# intermediate point files contain coordinates up to 1e75, which collapse the scene).
-data/thanjavur-vggt
+# Thanjavur ships: its diverged C_2 merges (coords up to 1e75) were re-seated from
+# their sane child exports on 2026-09-09 (thanjavur_viz_reseat.py). Intermediate
+# outputs the viewer does not request stay excluded.
+data/thanjavur-vggt/**/merged_pre_ba
+data/thanjavur-vggt/**/vggt_pre_ba
+data/thanjavur-vggt/**/metrics
+data/thanjavur-vggt/**/plots
