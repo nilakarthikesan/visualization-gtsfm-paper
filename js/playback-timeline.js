@@ -1,9 +1,9 @@
-export const DEFAULT_PLAYBACK_SECONDS = 30;
+export const DEFAULT_SECONDS_PER_EVENT = 0.5;
 
 // Map recorded event times directly onto the playback duration. There is no minimum
 // event delay: simultaneous events stay simultaneous. Each animation occupies
 // only the available interval immediately before its event's completion time.
-export function planPlayback(events, duration = DEFAULT_PLAYBACK_SECONDS, animationDuration = 0.8) {
+export function planPlayback(events, duration = events.length * DEFAULT_SECONDS_PER_EVENT, animationDuration = 0.8) {
     if (!events.length) return { duration: 0, starts: [], ends: [], animationDurations: [] };
     const count = events.length;
     const gaps = events.map((e, i) => i ? Math.max(0, e.realGapSec || 0) : 0);
@@ -73,12 +73,12 @@ export class PlaybackClock {
     }
 }
 
-export function formatClock(seconds, tenths = false) {
+export function formatClock(seconds, tenths = false, alwaysHours = tenths) {
     const ticks = Math.floor(Math.max(0, seconds) * 10 + 1e-7);
     const whole = Math.floor(ticks / 10);
     const hours = Math.floor(whole / 3600);
     const minutes = Math.floor(whole / 60) % 60;
     const secs = whole % 60;
     const pad = n => String(n).padStart(2, '0');
-    return `${hours || tenths ? pad(hours) + ':' : ''}${pad(minutes)}:${pad(secs)}${tenths ? '.' + ticks % 10 : ''}`;
+    return `${hours || alwaysHours ? pad(hours) + ':' : ''}${pad(minutes)}:${pad(secs)}${tenths ? '.' + ticks % 10 : ''}`;
 }

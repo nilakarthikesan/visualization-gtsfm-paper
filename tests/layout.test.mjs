@@ -49,29 +49,29 @@ function synthetic(path, positions) {
     return c;
 }
 
-test('default 30-second schedules preserve event timing without a minimum delay', () => {
+test('half-second-per-event schedules preserve event timing without a minimum delay', () => {
     assert.equal(planPlayback([]).duration, 0);
     for (const count of [1, 9, 93, 500]) for (const timed of [false, true]) {
         const events = Array.from({length: count}, (_, i) => ({
             realGapSec: timed && i ? (i % 7 ? 1 : 10000) : 0
         }));
         const plan = planPlayback(events);
-        assert.equal(plan.duration, 30);
+        assert.equal(plan.duration, count * 0.5);
         assert.equal(plan.starts.length, count);
-        assert.equal(plan.ends[count - 1], count > 1 ? 30 : 0);
+        assert.equal(plan.ends[count - 1], count > 1 ? plan.duration : 0);
         for (let i = 0; i < count; i++) {
             assert.ok(plan.animationDurations[i] >= 0);
             assert.ok(plan.animationDurations[i] <= .8 + 1e-9);
             assert.ok(plan.starts[i] >= (plan.ends[i - 1] || 0));
             assert.ok(plan.indexAt(plan.starts[i]) >= i);
         }
-        assert.equal(plan.indexAt(30), count - 1);
-        assert.equal(plan.runClock(30), null, 'must not invent missing run timestamps');
+        assert.equal(plan.indexAt(plan.duration), count - 1);
+        assert.equal(plan.runClock(plan.duration), null, 'must not invent missing run timestamps');
     }
     const burst = planPlayback([{realGapSec:0}, {realGapSec:0}, {realGapSec:1}, {realGapSec:5999}]);
-    assert.deepEqual(burst.ends, [0, 0, .005, 30]);
+    assert.deepEqual(burst.ends, [0, 0, 1 / 6000 * 2, 2]);
     assert.equal(burst.animationDurations[1], 0);
-    assert.equal(burst.animationDurations[2], .005);
+    assert.equal(burst.animationDurations[2], 1 / 6000 * 2);
 });
 
 test('playback clock excludes pauses, supports seeks, and cannot accumulate frame drift', () => {
@@ -105,6 +105,9 @@ test('run clock advances between events and labels compressed idle intervals', (
     assert.equal(plan.runClock(60).elapsed, 90100);
     assert.equal(formatClock(60), '01:00');
     assert.equal(formatClock(90100, true), '25:01:40.0');
+    assert.equal(formatClock(4.5, true, false), '00:04.5');
+    assert.equal(formatClock(46.5, true, false), '00:46.5');
+    assert.equal(formatClock(3600.5, true, false), '01:00:00.5');
 });
 
 test('pausing the playback clock freezes an in-progress reconstruction animation', () => {
@@ -149,7 +152,7 @@ function verifyDefaultPlayback(clusters, engine, events) {
     app.advancePlayback(1000 + plan.duration - .001); engine.update(0);
     assert.equal(app.isPlaying, true, 'must not finish before the scheduled duration');
     app.advancePlayback(1000 + plan.duration);
-    assert.equal(app.playback.elapsed, 30);
+    assert.equal(app.playback.elapsed, events.length * 0.5);
     assert.equal(app.isPlaying, false);
     assert.equal(app.finalViewActive, true);
     assert.equal(engine.activeAnimations.length, 0, 'final animation must finish within the replay duration');
@@ -225,7 +228,7 @@ test('look-ahead packing avoids leaf-count slivers in a 16-leaf caterpillar', ()
 test('Gerrard Hall selection loads its own data and completes its nine-event hierarchy', async () => {
     assert.throws(() => new VGGTDataLoader('missing-scene'), /Unknown dataset/);
     assert.throws(() => new VGGTDataLoader('toString'), /Unknown dataset/);
-    assert.equal(new VGGTDataLoader().datasetKey, 'original');
+    assert.equal(new VGGTDataLoader().datasetKey, 'BRUSSELS');
     const oldFetch = globalThis.fetch, oldLog = console.log;
     const requested = [];
     console.log = () => {};
@@ -236,7 +239,9 @@ test('Gerrard Hall selection loads its own data and completes its nine-event hie
     try {
         const loader = new VGGTDataLoader('original');
         assert.equal(loader.dataset.sceneName, 'Gerrard Hall');
+        loader.computePointMatching = () => { throw new Error('Loading must not compute matches'); };
         const clusters = await loader.load();
+        assert.ok([...clusters.values()].every(c => !c.matchData));
         const world = new THREE.Group();
         const frustums = new FrustumEngine(world);
         await frustums.loadForClusters(clusters, loader);
@@ -269,6 +274,8 @@ test('Brussels: disjoint frontiers, 95% coverage, reveals, and clipped merge tra
     try {
         const loader = new VGGTDataLoader('BRUSSELS');
         const clusters = await loader.load();
+        assert.ok([...clusters.values()].every(c => !c.matchData));
+        loader.computePointMatching(); // Explicit preparation for trajectory assertions below.
         const world = new THREE.Group();
         const frustums = new FrustumEngine(world);
         await frustums.loadForClusters(clusters,loader);

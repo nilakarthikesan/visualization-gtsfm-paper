@@ -1,13 +1,14 @@
 import * as THREE from 'three';
-import { planPlayback, PlaybackClock, formatClock, DEFAULT_PLAYBACK_SECONDS } from './playback-timeline.js?v=2';
+import { planPlayback, PlaybackClock, formatClock } from './playback-timeline.js?v=3';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=56';
+import { VGGTDataLoader, DATASETS, DEFAULT_DATASET } from './data-loader-vggt.js?v=57';
+import { MatchingCoordinator, matchingPriorities } from './matching-coordinator.js?v=1';
 import { SquarenessLayoutEngine } from './layout-engine-squareness.js?v=53';
-import { LayoutGuides } from './layout-guides.js?v=3';
+import { LayoutGuides } from './layout-guides.js?v=4';
 import { bindRegionClip } from './region-clipping.js?v=1';
 import { InteractionEngine } from './interaction-engine.js?v=6';
 import { SquarenessAnimationEngine } from './animation-engine-squareness.js?v=49';
@@ -86,7 +87,9 @@ export class VGGTHierarchyApp {
     constructor() {
         // The explanatory layout uses contained paths without ambient point drift.
         this.flowMode = false;
-        this.blendMode = this.flowMode ? 'glow' : (localStorage.getItem('gh-blend-mode') || 'sharp');
+        // The project-page demo always uses the default, regardless of saved viewer settings.
+        this.blendMode = new URLSearchParams(window.location.search).get('embed') === '1'
+            ? 'sharp' : this.flowMode ? 'glow' : (localStorage.getItem('gh-blend-mode') || 'sharp');
         this.cameraAnimTarget = null;
         this.gradientBg = localStorage.getItem('gh-bg') || 'none';
         this.groundGridEnabled = localStorage.getItem('gh-grid') === 'true';
@@ -102,7 +105,6 @@ export class VGGTHierarchyApp {
         // the camera, so auto-framing cedes control until Reset (smart-suspend).
         this.autoFrameEnabled = localStorage.getItem('gh-auto-frame') !== 'false';
         this.userCameraOverride = false;
-        this.TARGET_VIZ_SEC = DEFAULT_PLAYBACK_SECONDS;
         // Hold the final composition for the entire timeline. Follow remains opt-in.
         this.fixedFrame = localStorage.getItem('gh-fixed-frame') !== 'false';
         const regions = new URLSearchParams(window.location.search).get('regions');
@@ -810,6 +812,18 @@ export class VGGTHierarchyApp {
             }
 
             console.log(`Loaded ${loadedCount}/${clusters.size} clusters with point data`);
+
+            // Snapshot normalized positions before any reveal can change geometry.
+            this.matchingCoordinator?.dispose();
+            this.matchingCoordinator = new MatchingCoordinator(clusters);
+            this.matchingCoordinator.initialize();
+            if (!this._matchingPageHide) {
+                this._matchingPageHide = event => {
+                    // A back/forward-cache entry keeps its worker and dataset alive.
+                    if (!event.persisted) this.matchingCoordinator?.dispose();
+                };
+                window.addEventListener('pagehide', this._matchingPageHide);
+            }
         
             for (const cluster of clusters.values()) {
                 this.worldGroup.add(cluster.group);
@@ -846,9 +860,10 @@ export class VGGTHierarchyApp {
             if (!this.events.length) throw new Error('No reconstruction events loaded');
             this.currentEventIndex = 0;
 
-            this.playbackPlan = planPlayback(this.events, this.TARGET_VIZ_SEC);
+            this.playbackPlan = planPlayback(this.events);
             this.playback = new PlaybackClock(this.playbackPlan.duration);
             this.animationEngine.now = () => this.playback.elapsed * 1000;
+            this.refreshMatching();
 
             const leafClusters = this.animationEngine.getLeafClusters();
             this.convergenceEngine.prepareAllLeaves(leafClusters);
@@ -929,6 +944,7 @@ export class VGGTHierarchyApp {
             this.animate();
             
         } catch (err) {
+            this.matchingCoordinator?.dispose();
             console.error("App Start Error:", err);
             this.ui.loadingText.innerHTML = `<span style="color: #ff4444">Error starting app:<br>${err.message}</span>`;
         }
@@ -953,7 +969,7 @@ export class VGGTHierarchyApp {
         // Reserve fixed UI bands so changing annotation text cannot reframe a build.
         const embed = document.body.classList.contains('embed-mode');
         const top = embed ? (width < 760 ? 190 : 80) : (width < 1050 ? 195 : 125);
-        const bottom = embed ? 220 : 260;
+        const bottom = embed ? 180 : 260;
         return { left: 24, top, width: Math.max(100, width - reserved - 48),
             height: Math.max(100, window.innerHeight - top - bottom) };
     }
@@ -1076,12 +1092,14 @@ export class VGGTHierarchyApp {
         }
         this.currentEventIndex = index;
         this.animationEngine.applyEventInstant(index);
+        this.refreshMatching(index, false);
         this.frustumEngine.syncToEventIndex(this.events, index);
         this.fitCameraToVisible();
         this.updateUI();
     }
 
     collapseToFinalView() {
+        this.matchingCoordinator?.prioritize([]);
         this.finalViewActive = true;
         const sceneName = DATASETS[this.datasetKey]?.sceneName || 'the reconstruction';
         this.ui.eventLabel.textContent = `Assembled Reconstruction — ${sceneName}`;
@@ -1151,7 +1169,7 @@ export class VGGTHierarchyApp {
             if (element && element.textContent !== text) element.textContent = text;
         };
         setText(run, clock ? formatClock(clock.elapsed, true) : 'No timestamps');
-        setText(progress, formatClock(elapsed) + ' / ' + formatClock(this.playback.duration));
+        setText(progress, formatClock(elapsed, true, false) + ' / ' + formatClock(this.playback.duration, true, false));
         setText(status, elapsed >= this.playback.duration ? 'Complete'
             : !this.isPlaying ? 'Paused'
             : clock?.rate > 0 ? clock.rate.toFixed(1) + '×' + (clock.compressedIdle ? ' · idle gap compressed' : '')
@@ -1159,7 +1177,14 @@ export class VGGTHierarchyApp {
         if (this.ui.progressBar) this.ui.progressBar.style.width = (elapsed / this.playback.duration * 100) + '%';
     }
 
+    refreshMatching(index = this.currentEventIndex, includeCurrent = true) {
+        if (!this.matchingCoordinator || !this.playbackPlan) return;
+        const unfinished = includeCurrent && this.playback.elapsed < this.playbackPlan.ends[index];
+        this.matchingCoordinator.prioritize(matchingPriorities(this.events, this.playbackPlan, index, unfinished));
+    }
+
     startScheduledEvent(index) {
+        this.refreshMatching(index);
         this.animationEngine.applyEventInstant(index - 1);
         this.currentEventIndex = index;
         const duration = this.playbackPlan.animationDurations[index];
@@ -1213,6 +1238,7 @@ export class VGGTHierarchyApp {
             this.isPlaying = false;
         } else {
             if (this.playback.elapsed >= this.playback.duration) this.seekPlayback(0);
+            this.refreshMatching();
             this.playback.play(now);
             this.isPlaying = true;
         }

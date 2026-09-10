@@ -26,14 +26,14 @@ export class LayoutGuides {
         const maxDepth = Math.max(0, ...this.layout.treeNodes.map(node => node.depth));
         const legend = document.getElementById('layout-depth-legend');
         if (legend) {
-            legend.querySelector('.depth-end').textContent = `Root → depth ${maxDepth}`;
+            legend.querySelector('.depth-end').textContent = `Depth ${maxDepth} → root`;
             const colors = Array.from({length: 7}, (_, i) =>
-                `rgb(${depthColor(maxDepth * i / 6, maxDepth, this.darkTheme)})`);
+                `rgb(${depthColor(maxDepth * (6 - i) / 6, maxDepth, this.darkTheme)})`);
             legend.querySelector('.depth-ramp').style.background =
                 `linear-gradient(to right, ${colors.join(', ')})`;
             legend.querySelector('.depth-ticks').replaceChildren(...Array.from({length: maxDepth + 1}, (_, depth) => {
                 const tick = document.createElement('span');
-                tick.textContent = depth;
+                tick.textContent = maxDepth - depth;
                 return tick;
             }));
         }
