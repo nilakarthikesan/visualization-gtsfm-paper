@@ -308,7 +308,5 @@ python3 -m http.server 8086
 
 ## Questions?
 
-Contact: [Your Name]
-Repository: gerrard-hall-v3
-
-
+Contact: [Nila Karthikesan](https://github.com/nilakarthikesan)
+Repository: visualization-gtsfm-paper

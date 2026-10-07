@@ -1,172 +1,68 @@
-# GTSfM Paper Visualization
+# GTSfM Reconstruction Visualization
 
-Interactive Three.js visualization of the GTSfM hierarchical partition-and-merge pipeline for 3D reconstruction. The final merged reconstruction establishes a fixed viewport; its region is recursively allocated to child reconstructions, which then appear and merge within those reserved regions. See [the layout design and verification guide](docs/REVERSE-MERGE-LAYOUT.md).
+Interactive Three.js visualization of exported reconstructions from the GTSfM hierarchical partition-and-merge pipeline. The viewer loads point clouds, camera poses, merge hierarchies, and event timestamps to show how partial reconstructions combine.
 
-Datasets included:
+My contribution is the browser visualization and its supporting layout, playback, data-loading, and recording software. The reconstructions and reconstruction methods come from the GTSfM team and collaborators.
 
-| Dataset | Description | Timeline |
-|---|---|---|
-| Gerrard Hall (original) | UNC Chapel Hill building, the version shown in the team recording | 9 events |
-| Brussels (full: C_1+C_2+C_3) | Complete Brussels reconstruction with the global root merge | 93 events (40 leaves + 53 merges) |
-| C_1 / C_2 / C_3 | Individual Brussels partition branches | 66 / 13 / 13 events |
-| C_4 (dense) | Community-photo reconstruction, ~600k points with real RGB | 6 events |
-
-## Quick Start
+## Current viewer
 
 ```bash
 python3 -m http.server 8000
 ```
 
-Open [http://localhost:8000/hierarchy-vggt.html](http://localhost:8000/hierarchy-vggt.html) - this loads the full Brussels visualization. Pick other datasets from the Dataset dropdown in Visual Settings, or link directly:
+Open [hierarchy-vggt.html](http://localhost:8000/hierarchy-vggt.html). The current registry in [js/data-loader-vggt.js](js/data-loader-vggt.js) provides:
 
-- `hierarchy-vggt.html?dataset=BRUSSELS` - full Brussels merge story
-- `hierarchy-vggt.html?dataset=original` - original Gerrard Hall visualization
-- `hierarchy-vggt.html?dataset=C_1` (also `C_2`, `C_3`, `C_4`)
+- `BRUSSELS`: the current Grand-Place run under `data/brussels-rerun`, with C_1 and C_2 branches. The run has 25 leaves and 29 merges.
+- `original`: Gerrard Hall under `data/gerrard-hall-vggt/results`.
+- `THANJAVUR`: Brihadeeswarar Temple under `data/thanjavur-vggt`.
+- `C_1`: the deep branch of the current Brussels run.
 
-## Controls
+Select a dataset in the viewer or use `?dataset=BRUSSELS`, `?dataset=original`, `?dataset=THANJAVUR`, or `?dataset=C_1`. Historical C_2/C_3/C_4 viewer links do not correspond to the current dataset registry.
 
-| Button | Action |
-|--------|--------|
-| **Play/Pause** | Auto-advance through all timeline events |
-| **Prev/Next** | Step through events one at a time |
-| **Reset** | Return to the first event |
-| **Record** | Start/stop recording the visualization as a `.webm` video |
+## Controls and playback
 
-Brussels is the default dataset. Playback starts automatically after loading,
-including when switching datasets in the project-page tabs or the viewer's picker.
-Each uninterrupted replay lasts 0.5 seconds times its number of events, including
-the final merge: 4.5 seconds for Gerrard Hall (9 events) and 46.5 seconds for Brussels
-(93 events). This sets the average pace; individual gaps retain their relative timing. Recorded
-event gaps are scaled directly with no minimum delay; animations shorten to fit.
-The live run clock shows accelerated elapsed time alongside the dataset's playback
-counter. Pause freezes both clocks and animations; scrubbing moves them together.
+Play/Pause advances the event timeline; Prev/Next steps between events; Reset returns to the beginning. Record exports the canvas as WebM. Mouse drag orbits, scrolling zooms, and right drag pans. Home/End jump to the first/final event; the timeline supports seeking.
 
-Point matching runs in a background worker using stable reconstruction coordinates,
-with lookahead for the next two animated merges. Loading and playback never wait
-for matches: a merge whose matches are not ready uses a crossfade in its assigned
-regions, keeping the event-count-based schedule (including during recording). Completed
-matches are cached for replay until the viewer reloads. Seeking reprioritizes pending
-work; if workers are unavailable, the viewer continues with crossfades.
+The completed reconstruction defines a fixed frame. The layout allocates regions recursively to descendants, then replays merges within those regions. Reserved-region guides show tree depth. Point matching runs in a background worker with merge lookahead and caching; playback uses crossfades when matches are unavailable. See [REVERSE-MERGE-LAYOUT.md](docs/REVERSE-MERGE-LAYOUT.md) for implementation and verification details.
 
-**Show Reserved Regions** is on by default, with boundaries colored by tree depth. **Show Node Labels** is opt-in. Cells fit the central 95% of points and cameras; the planner considers reconstruction shapes at every merge stage to reduce unused space. **Lock Final Frame** keeps the completed reconstruction’s frame throughout playback. Home/End jump to the first/final event. Click anywhere on the timeline bar to jump to an event. Mouse drag orbits, scroll zooms, right-click drag pans.
+Playback compresses recorded time for presentation. Parent timestamps can be adjusted to preserve child-before-parent order. Displayed event order and animation timing should not be treated as an unmodified execution trace.
 
-## Point colors
+## Data format and preparation
 
-The Brussels exports (C_1/C_2/C_3 and the root merge) were written without RGB (all points `0 0 0`). The app detects this and renders a warm height-gradient fallback so the geometry is always visible, including in dark mode.
+Each reconstruction uses COLMAP text files:
 
-To bake in real photographic colors once the source photos are available:
+- `points3D.txt`: point IDs, coordinates, RGB, and error.
+- `cameras.txt`: camera intrinsics.
+- `images.txt`: camera poses and image names.
+- `structure.json`: hierarchy for datasets using manifests.
+- `timestamps.json`: event timing where available.
 
-```bash
-pip install pillow numpy
-python3 colorize_points.py --images <photo_dir> --recursive data/gerrard-hall-vggt-v2
-```
+The web exports omit observation tracks to reduce transfer size. Preserve the first eight fields of each point row and the empty second row after each image pose. [scripts/strip_image_tracks.py](scripts/strip_image_tracks.py) handles image-track removal. Colorization requires the original observations and source images; run [colorize_points.py](colorize_points.py) before stripping tracks.
 
-The script samples each 3D point's track observations from the photos (the same way COLMAP assigns point colors) and rewrites `points3D.txt` in place (backup kept as `.bak`). Run colorization on the original export before stripping tracks; the web copies below no longer contain those observations. The app needs no changes afterwards - it uses real colors automatically when they exist.
+The viewer uses stored RGB when available and fallback colors for colorless exports. `pointScale` in the dataset registry controls point size; `?psize=0.4` provides a URL override.
 
-## Track-free web exports
-
-The Gerrard Hall, Brussels, and Thanjavur web datasets omit COLMAP track observations.
-The viewer uses point coordinates and colors, camera poses, and spatial point matching;
-it does not use observation tracks. When preparing updated exports:
-
-- Keep the first eight fields of every `points3D.txt` row: `POINT3D_ID X Y Z R G B ERROR`. Remove the trailing `IMAGE_ID POINT2D_IDX` pairs.
-- Preserve each `images.txt` pose row and replace its following `POINTS2D` row with an empty line, using `scripts/strip_image_tracks.py`. The empty line is required by the camera parsers.
-- Preserve `cameras.txt`, manifests, timestamps, and existing point colors.
-
-Across the files loaded by each dataset, removing tracks reduces combined
-`points3D.txt` and `images.txt` sizes as follows (decimal MB):
-
-| Dataset | Text before → after | Gzip before → after |
-|---|---:|---:|
-| Gerrard Hall | 6.26 → 1.15 MB | 2.71 → 0.54 MB |
-| Brussels | 86.06 → 44.80 MB | 35.41 → 20.26 MB |
-| Thanjavur | 140.24 → 88.62 MB | 58.82 → 40.07 MB |
-
-Gzip figures sum files compressed individually at level 6; actual HTTP transfer sizes
-may differ. GitHub Pages already serves the point text with gzip compression, which
-browsers decode automatically, so no custom client decompressor is needed.
-
-## Adding the fine optimization-points dataset
-
-Kathir's reconstructions (see [examples](https://kathirgounder.github.io/project.html?id=reconstructions)) use the **dense fine points straight from the GTSFM optimization**, not the sparse sampled points currently in the Brussels exports. GTSFM writes COLMAP `points3D.txt`, so the loader ingests them with no format changes. To add one:
-
-1. Drop the reconstruction under `data/<scene>/` with the standard layout:
-   - `<node>/points3D.txt` per cluster node (COLMAP: `id x y z r g b error track…`)
-   - `merged/images.txt` (camera extrinsics — used to orient the scene upright)
-   - optional `timestamps.json` (per-node timestamps drive the timeline pacing)
-2. Generate the manifest: `python3 generate_structure.py data/<scene>`
-3. Register it in `DATASETS` (`js/data-loader-vggt.js`). Dense clouds should set a
-   small `pointScale` so the fine detail isn't buried under fat points:
-
-   ```js
-   BRUSSELS_FINE: { label: 'Brussels (fine)', basePath: 'data/brussels-fine', useManifest: true, pointScale: 0.4 }
-   ```
-
-### Point size for fine vs sampled clouds
-
-`pointScale` (per dataset) multiplies every point's on-screen size. Sparse "sampled"
-clouds read best as surfaces at `1.0`; dense "fine" clouds want `~0.3–0.5` so
-individual points stay crisp. Tune it live without editing code:
-
-- URL override: `hierarchy-vggt.html?dataset=…&psize=0.4`
-- Console: `setPointSizeScale(0.4)` (re-applies immediately)
-
-Fine points from the optimization typically carry **real RGB**, which also resolves
-the colorless `0 0 0` fallback the current Brussels exports trigger.
-
-## Regenerating dataset manifests
-
-When new reconstruction folders are added, regenerate the `structure.json` manifests the loader consumes:
-
-```bash
-python3 generate_structure.py data/gerrard-hall-vggt-v2/C_1        # single branch
-python3 generate_structure.py --exclude C_4 data/gerrard-hall-vggt-v2  # combined root over C_1+C_2+C_3
-```
-
-## Brussels colored export (current data)
-
-`data/gerrard-hall-vggt-v2` (the `BRUSSELS` / `C_1` / `C_2` / `C_3` datasets) holds Kathir's
-colored Brussels export: every node's `points3D.txt` carries real per-point RGB, so the
-loader uses it directly and the grayscale `applyFallbackColors()` ramp no longer triggers.
-`C_4` is a separate reconstruction not included in that export and is preserved as-is.
-To refresh with a newer export, replace the per-node `points3D.txt` / `images.txt` /
-`cameras.txt` and rerun `generate_structure.py` (see above).
-
-Data files are fetched with `cache: 'no-cache'` (in `js/data-loader-vggt.js` and
-`js/frustum-engine.js`) so an updated export is never masked by a stale browser-cached
-copy; a normal reload always revalidates and picks up new colors/points.
-
-### Timestamps (real arrival order)
-
-`data/gerrard-hall-vggt-v2/timestamps.json` now carries the **real pipeline arrival order**
-Kathir sent (`cluster_arrival_order.csv`). Each cluster path maps to `{ "epoch": <unix>,
-"arrival_rank": <n> }`: `cluster_reconstruction` rows → `<node>/vggt`, `merge` rows →
-`<node>/merged`, and the root `merge, root` → `merged`. `initTimeline()` in
-`js/animation-engine-squareness.js` sorts by `epoch`, so the viewer plays in true wall-clock
-order and shows the real reconstruction time per event.
-
-Raw arrival order is **not** always a valid bottom-up merge order: the run occasionally logs a
-parent merge a few seconds before its child merge, which would leave orphan child clusters
-visible at the end. When regenerating `timestamps.json`, a post-order pass bumps each parent's
-epoch to `max(own, max(child)+1ms)` so every parent is strictly after all descendants while
-otherwise preserving real times. Regenerate from the CSV if the run changes.
-
-### Removed dataset
-
-The `C_4` "community photo collection" tab was removed: per Kathir, Dubrovnik was never
-reconstructed successfully, so it should not be shown.
+To add a dataset, supply reconstruction files, generate its manifest with [generate_structure.py](generate_structure.py), and register the export in `DATASETS`. Keep the reconstruction source and any preprocessing documented.
 
 ## Architecture
 
-- `js/data-loader-vggt.js` - Dataset registry, point cloud + camera loading, scene orientation from COLMAP poses, fallback coloring
-- `js/point-matching.js` / `js/point-matching-worker.js` / `js/matching-coordinator.js` - Spatial-hash matching, background computation, and cached merge lookahead
-- `js/layout-engine-squareness.js` / `js/recursive-floorplan.js` - Final-frame layout with geometry-aware recursive packing
-- `js/layout-guides.js` / `js/region-clipping.js` - Optional reserved-region guides and fragment containment
-- `js/animation-engine-squareness.js` - Timeline system with per-point merge interpolation
-- `js/convergence-engine.js` - Scatter-to-structure reconstruction reveal effect
-- `js/frustum-engine.js` - Camera frustum display per cluster
-- `js/main-hierarchy-vggt.js` - App entry point, Three.js scene setup, UI, recording
+- [js/data-loader-vggt.js](js/data-loader-vggt.js): dataset registry, hierarchy and geometry loading, orientation, and colors.
+- [js/recursive-floorplan.js](js/recursive-floorplan.js) and [js/layout-engine-squareness.js](js/layout-engine-squareness.js): region allocation and layout.
+- [js/point-matching.js](js/point-matching.js), worker, and coordinator: spatial matching and cached lookahead.
+- [js/animation-engine-squareness.js](js/animation-engine-squareness.js): merge playback.
+- [js/frustum-engine.js](js/frustum-engine.js): camera visualization.
+- [js/main-hierarchy-vggt.js](js/main-hierarchy-vggt.js): viewer UI, rendering, and recording.
 
-## Preserved versions
+## Interpretation and limitations
 
-The exact version shown in the April 2026 team recording is tagged [`gerrard-hall-original`](../../tree/gerrard-hall-original). Gerrard Hall remains available through `?dataset=original` or the dataset picker.
+This application visualizes supplied exports; it does not run SfM or independently validate reconstruction quality. Spatial point matching is a display correspondence heuristic, rather than a measurement of track identity. Some Thanjavur intermediate exports were reseated from their child exports to repair divergent coordinate frames; those display repairs are documented in the dataset-loader comments and should not be interpreted as original pipeline outputs.
+
+Historical design notes and earlier viewer pages remain in the repository. Their event counts and controls may differ from the current viewer. The Gerrard Hall version shown in the team recording is preserved by the `gerrard-hall-original` tag.
+
+## References and credit
+
+- [GTSfM](https://github.com/borglab/gtsfm): reconstruction pipeline and collaborators' data.
+- [COLMAP format](https://colmap.github.io/format.html): reconstruction export conventions.
+- [Three.js](https://threejs.org/): browser rendering.
+- [Building Rome in a Day](http://grail.cs.washington.edu/rome/): visualization reference.
+
+The visualization contribution is distinct from authorship of the underlying reconstruction algorithms. Preserve source attribution and applicable code/data licenses when reusing exports.

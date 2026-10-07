@@ -165,7 +165,7 @@ data/gerrard-hall-vggt/results/ - Point cloud data (17 folders)
 ### Running Locally
 
 ```bash
-cd gerrard-hall-v3-2
+cd visualization-gtsfm-paper
 python3 -m http.server 8080
 # Open http://localhost:8080/hierarchy-vggt.html
 ```

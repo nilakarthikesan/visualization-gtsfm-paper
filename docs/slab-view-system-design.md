@@ -354,12 +354,12 @@ This implementation follows Frank's "sheets of glass" concept:
 
 | Requirement | Implementation |
 |-------------|----------------|
-| ✅ Clusters on horizontal layers | Y position based on level |
-| ✅ Layers stacked vertically | Levels 0-4 from bottom to top |
-| ✅ Sequential merging | Animation shows clusters rising and combining |
-| ✅ Visual merge representation | Children physically move toward parents |
-| ✅ Hierarchical reconstruction | Tree structure from GTSfM preserved |
-| ✅ Final merged building | Zoom-in on complete Gerrard Hall at end |
+|  Clusters on horizontal layers | Y position based on level |
+|  Layers stacked vertically | Levels 0-4 from bottom to top |
+|  Sequential merging | Animation shows clusters rising and combining |
+|  Visual merge representation | Children physically move toward parents |
+|  Hierarchical reconstruction | Tree structure from GTSfM preserved |
+|  Final merged building | Zoom-in on complete Gerrard Hall at end |
 
 ### Key Insight
 Users should **SEE** the merging happen - clusters physically moving upward and combining - not just appearing/disappearing. This makes the GTSfM pipeline's hierarchical reconstruction process tangible and understandable.

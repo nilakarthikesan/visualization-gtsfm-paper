@@ -131,7 +131,7 @@ Events 20-30: ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑
 Events 31-37: ⊕ ⊕ ⊕ ⊕ ⊕ ⊕ ⊕
               (7 parent merges - multiple children combine)
 
-Event 38:     ★ FINAL MERGE → 🏛️ GERRARD HALL
+Event 38:      FINAL MERGE →  GERRARD HALL
               (5 clusters become complete building)
 ```
 
@@ -166,4 +166,3 @@ Event 38:     ★ FINAL MERGE → 🏛️ GERRARD HALL
 ```
 
 This graph continues deeper for the C_4 branch, which has the most complex hierarchy.
-

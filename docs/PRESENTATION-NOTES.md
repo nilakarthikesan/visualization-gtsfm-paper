@@ -172,5 +172,4 @@ This is fundamental to how GTSfM works and our animation respects this.
 | Deepest | C_4_1_1_1_1, etc. | many |
 
 ### Repository
-https://github.com/nilakarthikesan/gerrard-hall-v3
-
+https://github.com/nilakarthikesan/visualization-gtsfm-paper

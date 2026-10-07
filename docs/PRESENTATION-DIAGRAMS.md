@@ -39,7 +39,7 @@
 ║  PHASE 4: FINAL MERGE (Event 38)                                               ║
 ║  ┌─────────────────────────────────────────────────────────────────────────┐   ║
 ║  │                         ╔═══════════╗                                   │   ║
-║  │    ◎    ◎    ◎    ◎    ◎   →   ║ GERRARD ║   →   🔄 360°              │   ║
+║  │    ◎    ◎    ◎    ◎    ◎   →   ║ GERRARD ║   →    360°              │   ║
 ║  │   ba   C1   C2   C3   C4       ║  HALL   ║                             │   ║
 ║  │  out merged merged merged merged ╚═══════════╝                          │   ║
 ║  │             5 top-level clusters → Final Building                      │   ║
@@ -136,7 +136,7 @@
 │  ────────────────────────────                                               │
 │                                                                              │
 │     ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌──┐      ╔═════════════════╗                      │
-│     │BA│ │C1│ │C2│ │C3│ │C4│  →   ║   GERRARD HALL  ║  →  🔄 360°          │
+│     │BA│ │C1│ │C2│ │C3│ │C4│  →   ║   GERRARD HALL  ║  →   360°          │
 │     └──┘ └──┘ └──┘ └──┘ └──┘      ║    COMPLETE     ║                      │
 │                                    ╚═════════════════╝                      │
 │     5 top-level           Final building        Camera rotation             │
@@ -243,10 +243,10 @@
 │   [◀ Prev] [Next ▶] [▶ Play]  ████████████████░░░░░░░░  [↺ Reset]          │
 │                                                                              │
 │   Now you can see:                                                          │
-│   ✓ Exact merge sequence (38 events)                                       │
-│   ✓ Which clusters combine                                                  │
-│   ✓ Animated transitions                                                   │
-│   ✓ Final building assembly                                                │
+│    Exact merge sequence (38 events)                                       │
+│    Which clusters combine                                                  │
+│    Animated transitions                                                   │
+│    Final building assembly                                                │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -343,5 +343,3 @@
 │                                         │
 └─────────────────────────────────────────┘
 ```
-
-
